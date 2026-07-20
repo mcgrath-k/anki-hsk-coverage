@@ -2,5 +2,8 @@
   "deck": "",
   "field": "",
   "version": "newest",
-  "include79": false
+  "show_known": true,
+  "collapsed": {},
+  "zoom": 1.0,
+  "known_file": ""
 }

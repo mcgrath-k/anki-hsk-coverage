@@ -2,66 +2,132 @@
 """
 HSK Coverage Map — visualize how much of the HSK vocabulary your deck covers.
 
-Word data: data/complete.json (stored as-is). Levels:
-  old-1..6      HSK 2.0 (2012)
-  new-1..7      HSK 3.0 (2021), 7 = bands 7-9
-  newest-1..7   HSK 3.0 (2025), 7 = bands 7-9
+Level membership and counts come from the official per-level lists in
+data/HSK2.0, data/HSK3.0 (2021) and data/HSK3.1 (2025). The dictionary for
+the detail card is CC-CEDICT, downloaded once into user_files/ on first
+run. Words you right-click as "known" persist in
+user_files/known_words.json. See vocab.py.
 
 Tools ▸ HSK Coverage Map
 """
 
+import faulthandler
 import json
 import os
 import re
+import threading
+import time
+import traceback
 import html as html_mod
 from collections import defaultdict
 
 from aqt import mw
 from aqt.qt import (
     QDialog, QVBoxLayout, QHBoxLayout, QComboBox, QCheckBox, QLabel,
-    QPushButton, qconnect,
+    QPushButton, QShortcut, QKeySequence, QMenu, QFileDialog, QTimer,
+    Qt, qconnect,
 )
 from aqt.webview import AnkiWebView
 from aqt.theme import theme_manager
 
-ADDON_DIR = os.path.dirname(__file__)
-DATA_PATH = os.path.join(ADDON_DIR, "data", "complete.json")
+from .vocab import (
+    Vocab, VERSIONS, VERSION_MAX, CEDICT_PATH, download_cedict,
+)
+from .render import LEVEL_COLORS, build_html, panel_stats, counts
 
-VERSIONS = [
-    ("old", "HSK 2.0 (2012)", 6),
-    ("new", "HSK 3.0 (2021)", 7),
-    ("newest", "HSK 3.0 (2025)", 7),
-]
-VERSION_MAX = {k: mx for k, _l, mx in VERSIONS}
+KNOWN_PATH = os.path.join(
+    os.path.dirname(__file__), "user_files", "known_words.json")
+USER_FILES = os.path.dirname(KNOWN_PATH)
+DEBUG_LOG = os.path.join(USER_FILES, "debug.log")
 
-LEVEL_COLORS = {
-    1: "#34d399",  # green
-    2: "#38bdf8",  # sky
-    3: "#a78bfa",  # violet
-    4: "#fbbf24",  # amber
-    5: "#fb7185",  # rose
-    6: "#f97316",  # orange
-    7: "#6366f1",  # indigo (HSK 7-9)
-}
 
-def level_label(lvl: int) -> str:
-    return "HSK 7–9" if lvl == 7 else "HSK %d" % lvl
+# ------------------------------------------------------------- diagnostics
 
+_debug_fh = None
+
+def _debug_file():
+    """Append-mode handle to user_files/debug.log (rotated at ~2 MB)."""
+    global _debug_fh
+    if _debug_fh is None:
+        os.makedirs(USER_FILES, exist_ok=True)
+        try:
+            if (os.path.exists(DEBUG_LOG)
+                    and os.path.getsize(DEBUG_LOG) > 2_000_000):
+                os.replace(DEBUG_LOG, DEBUG_LOG + ".1")
+        except OSError:
+            pass
+        _debug_fh = open(DEBUG_LOG, "a", encoding="utf-8", buffering=1)
+    return _debug_fh
+
+
+def debug_line(msg):
+    try:
+        _debug_file().write(
+            "%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg))
+    except OSError:
+        pass
+
+
+class _Watchdog:
+    """Freeze detector: a QTimer heartbeats on the Qt main thread; a
+    background thread dumps every thread's stack into debug.log when the
+    heartbeat stalls, so a hang leaves evidence of exactly where it is.
+    (faulthandler.enable() at the bottom of this file covers hard crashes.)
+    """
+
+    STALL_SECS = 8.0
+
+    def __init__(self):
+        self._beat = time.monotonic()
+        self._reported = False
+        self._timer = QTimer(mw)
+        qconnect(self._timer.timeout, self._on_beat)
+        self._timer.start(500)
+        threading.Thread(target=self._poll, daemon=True).start()
+
+    def _on_beat(self):
+        self._beat = time.monotonic()
+        self._reported = False
+
+    def _poll(self):
+        while True:
+            time.sleep(2.0)
+            lag = time.monotonic() - self._beat
+            if lag > self.STALL_SECS and not self._reported:
+                self._reported = True
+                try:
+                    f = _debug_file()
+                    f.write(
+                        "\n==== %s main thread unresponsive for %.0fs — "
+                        "dumping all stacks ====\n"
+                        % (time.strftime("%Y-%m-%d %H:%M:%S"), lag))
+                    faulthandler.dump_traceback(file=f, all_threads=True)
+                    f.write("==== end of dump ====\n")
+                except OSError:
+                    pass
+
+
+_watchdog = None
+
+def start_watchdog():
+    global _watchdog
+    if _watchdog is None:
+        _watchdog = _Watchdog()
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _SOUND_RE = re.compile(r"\[sound:[^\]]+\]")
 _BRACKET_RE = re.compile(r"[\(\（\[【].*?[\)\）\]】]")
-_NON_HAN_RE = re.compile(r"[^\u3400-\u9fff\u3007]")
+_NON_HAN_RE = re.compile(r"[^㐀-鿿〇]")
 
 
-def _clean(text: str) -> str:
+def _clean(text):
     text = _SOUND_RE.sub("", text)
     text = _TAG_RE.sub("", text)
     text = html_mod.unescape(text)
     return text.strip()
 
 
-def _hanzi_only(text: str) -> str:
+def _hanzi_only(text):
     return _NON_HAN_RE.sub("", _BRACKET_RE.sub("", text))
 
 
@@ -71,75 +137,53 @@ def _chunks(seq, n=4000):
         yield seq[i:i + n]
 
 
-# ---------------------------------------------------------------- vocab data
-
-class Vocab:
-    """Parsed view of complete.json.
-
-    levels[version][lvl] -> list of simplified words, most frequent first
-    words[simplified]    -> {forms, trad, freq, pos, levels}
-    """
-
-    def __init__(self, path):
-        with open(path, encoding="utf-8") as f:
-            raw = json.load(f)
-
-        self.words = {}
-        self.levels = {v: {l: [] for l in range(1, mx + 1)}
-                       for v, _lbl, mx in VERSIONS}
-        seen = {v: {l: set() for l in range(1, mx + 1)}
-                for v, _lbl, mx in VERSIONS}
-
-        for e in raw:
-            s = e.get("simplified", "").strip()
-            if not s:
-                continue
-            info = self.words.setdefault(s, {
-                "forms": [], "_fkeys": set(), "trad": [],
-                "freq": 10 ** 9, "pos": set(), "levels": set(),
-            })
-            freq = e.get("frequency")
-            if isinstance(freq, (int, float)):
-                info["freq"] = min(info["freq"], freq)
-            info["pos"] |= set(e.get("pos") or [])
-            for form in e.get("forms") or []:
-                t = (form.get("traditional") or "").strip()
-                py = (form.get("transcriptions") or {}).get("pinyin", "")
-                meanings = form.get("meanings") or []
-                key = (t, py)
-                if key in info["_fkeys"]:
-                    continue
-                info["_fkeys"].add(key)
-                info["forms"].append({"t": t, "p": py, "m": meanings})
-                if t and t != s and t not in info["trad"]:
-                    info["trad"].append(t)
-            for tag in e.get("level") or []:
-                try:
-                    ver, num = tag.split("-")
-                    num = int(num)
-                except ValueError:
-                    continue
-                if ver in self.levels and num in self.levels[ver]:
-                    info["levels"].add(tag)
-                    if s not in seen[ver][num]:
-                        seen[ver][num].add(s)
-                        self.levels[ver][num].append(s)
-
-        for ver in self.levels:
-            for lvl in self.levels[ver]:
-                self.levels[ver][lvl].sort(key=lambda w: self.words[w]["freq"])
-
-    def aliases(self, word):
-        return [word] + self.words[word]["trad"]
-
-
 _vocab = None
 
 def get_vocab():
+    """Load word data, fetching CC-CEDICT once on first ever run."""
     global _vocab
     if _vocab is None:
-        _vocab = Vocab(DATA_PATH)
+        if not os.path.exists(CEDICT_PATH):
+            from aqt.utils import tooltip
+            mw.progress.start(
+                label="Downloading CC-CEDICT dictionary (one time, ~4 MB)…",
+                immediate=True)
+            try:
+                download_cedict()
+            except Exception as e:
+                tooltip(
+                    "Dictionary download failed (%s) — definitions and "
+                    "traditional-form matching are unavailable; will retry "
+                    "next time the map is opened." % e, period=5000)
+            finally:
+                mw.progress.finish()
+        _vocab = Vocab()
     return _vocab
+
+
+# ------------------------------------------------------------ known words
+
+def known_path():
+    """The known-words file: user_files/known_words.json by default, or a
+    user-chosen location (config "known_file", set via the settings menu)
+    survives removing/reinstalling the add-on."""
+    cfg = mw.addonManager.getConfig(__name__) or {}
+    return cfg.get("known_file") or KNOWN_PATH
+
+
+def load_known(path=None):
+    try:
+        with open(path or known_path(), encoding="utf-8") as f:
+            return set(json.load(f).get("words", []))
+    except (OSError, ValueError):
+        return set()
+
+
+def save_known(words, path=None):
+    path = path or known_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"words": sorted(words)}, f, ensure_ascii=False, indent=1)
 
 
 # ---------------------------------------------------------------- deck scan
@@ -229,209 +273,6 @@ def scan_deck(deck_name, field_name):
     return field_map, reviewed
 
 
-# ---------------------------------------------------------------- html
-
-CSS = """
-:root {
-  --bg:#fafaf9; --panel:#ffffff; --border:#e7e5e4; --text:#1c1917;
-  --muted:#78716c; --tile:#ebe9e8; --tiletext:#57534e; --overlay:#00000073;
-}
-body.night {
-  --bg:#171717; --panel:#1f1f1f; --border:#343434; --text:#f5f5f4;
-  --muted:#a8a29e; --tile:#2c2c2c; --tiletext:#9c9894; --overlay:#000000a8;
-}
-* { box-sizing:border-box; }
-body { margin:0; padding:18px; background:var(--bg); color:var(--text);
-  font-family:-apple-system,"Segoe UI","Helvetica Neue","PingFang SC",
-  "Hiragino Sans GB","Microsoft YaHei",sans-serif; }
-.summary { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap;
-  margin:0 2px 14px 2px; }
-.summary .big { font-size:30px; font-weight:700; letter-spacing:-0.5px; }
-.summary .sub { color:var(--muted); font-size:13px; }
-.board { display:grid; gap:12px; align-items:start;
-  grid-template-columns:repeat(auto-fill, minmax(430px, 1fr)); }
-@media (max-width: 480px) { .board { grid-template-columns:1fr; } }
-.panel { background:var(--panel); border:1px solid var(--border);
-  border-radius:12px; padding:12px 14px 14px 14px; min-width:0; }
-.panel-head { display:flex; align-items:baseline; gap:10px; margin-bottom:4px; }
-.lvl { font-weight:700; font-size:13px; letter-spacing:0.04em; color:var(--c); }
-.pct { font-size:12px; font-weight:700; color:var(--c);
-  font-variant-numeric:tabular-nums; }
-.stat { color:var(--muted); font-size:11.5px; margin-left:auto;
-  font-variant-numeric:tabular-nums; }
-.bar { height:3px; border-radius:2px; background:var(--tile);
-  margin:6px 0 10px 0; display:flex; overflow:hidden; }
-.bar .r { background:var(--c); }
-.bar .d { background:var(--c); opacity:0.35; }
-.tiles { display:flex; flex-wrap:wrap; gap:4px; }
-.t { font-size:12px; line-height:1; padding:4px 5px; border-radius:5px;
-  cursor:pointer; white-space:nowrap; position:relative;
-  border:1.5px solid transparent;
-  transition:transform .16s cubic-bezier(.2,.8,.3,1.2); }
-.t:hover { transform:scale(1.55); z-index:6; }
-.t.st-r { background:var(--c); color:#fff; }
-.t.st-d { background:var(--panel); color:var(--text); border-color:var(--c); }
-.t.st-a { background:var(--tile); color:var(--tiletext); }
-.legend { display:flex; gap:16px; align-items:center; flex-wrap:wrap;
-  margin-top:14px; color:var(--muted); font-size:12px; }
-.legend .t { cursor:default; --c:#94a3b8; }
-.legend .t:hover { transform:none; }
-
-/* info modal */
-#ov { position:fixed; inset:0; background:var(--overlay); display:none;
-  align-items:center; justify-content:center; z-index:50; }
-#ov.show { display:flex; }
-#card { background:var(--panel); border:1px solid var(--border);
-  border-radius:14px; padding:22px 26px; max-width:440px; width:88%;
-  max-height:80%; overflow-y:auto; box-shadow:0 18px 50px #00000055; }
-#card .hz { font-size:46px; line-height:1.15; margin-bottom:2px; }
-#card .py { font-size:17px; color:var(--c,#888); font-weight:600;
-  margin-bottom:2px; }
-#card .trad { color:var(--muted); font-size:13px; margin-bottom:8px; }
-#card ul { margin:6px 0 10px 0; padding-left:20px; font-size:13.5px; }
-#card li { margin:2px 0; }
-#card .badges { display:flex; gap:6px; flex-wrap:wrap; margin:10px 0 4px 0; }
-#card .badge { font-size:11px; font-weight:600; padding:3px 8px;
-  border-radius:99px; background:var(--tile); color:var(--muted); }
-#card .badge.lv { color:#fff; }
-#card .status { font-size:12.5px; color:var(--muted); margin-top:8px; }
-#card .btns { display:flex; gap:8px; margin-top:14px; }
-#card button { border:1px solid var(--border); background:var(--tile);
-  color:var(--text); font-size:12.5px; padding:6px 12px; border-radius:8px;
-  cursor:pointer; }
-#card button.primary { background:var(--c,#555); border-color:transparent;
-  color:#fff; }
-#card .formsep { border:0; border-top:1px solid var(--border); margin:10px 0; }
-"""
-
-JS = r"""
-var LEVEL_COLORS = %(colors)s;
-var VER_LABELS = {"old":"HSK 2.0","new":"HSK 3.0 (2021)","newest":"HSK 3.0 (2025)"};
-document.addEventListener('click', function(e){
-  var t = e.target.closest('.t[data-w]');
-  if (t) { pycmd('hskinfo:' + t.dataset.w, showInfo); return; }
-  if (e.target.id === 'ov') hideInfo();
-});
-document.addEventListener('keydown', function(e){
-  if (e.key === 'Escape') hideInfo();
-});
-function esc(s){ var d=document.createElement('div'); d.textContent=s;
-  return d.innerHTML; }
-function hideInfo(){ document.getElementById('ov').classList.remove('show'); }
-function showInfo(raw){
-  var d = (typeof raw === 'string') ? JSON.parse(raw) : raw;
-  var c = document.getElementById('card');
-  c.style.setProperty('--c', d.color);
-  var h = '<div class="hz">' + esc(d.word) + '</div>';
-  d.forms.forEach(function(f, i){
-    if (i > 0) h += '<hr class="formsep">';
-    h += '<div class="py">' + esc(f.p) + '</div>';
-    if (f.t && f.t !== d.word)
-      h += '<div class="trad">traditional: ' + esc(f.t) + '</div>';
-    if (f.m.length){
-      h += '<ul>';
-      f.m.forEach(function(m){ h += '<li>' + esc(m) + '</li>'; });
-      h += '</ul>';
-    }
-  });
-  h += '<div class="badges">';
-  d.levels.forEach(function(lv){
-    var parts = lv.split('-'); var n = parseInt(parts[1]);
-    var col = LEVEL_COLORS[n] || '#888';
-    var name = (n === 7 ? '7–9' : n);
-    h += '<span class="badge lv" style="background:' + col + '">' +
-         VER_LABELS[parts[0]] + ' · ' + name + '</span>';
-  });
-  h += '</div>';
-  h += '<div class="status">' + esc(d.status_text) + '</div>';
-  h += '<div class="btns">';
-  if (d.in_deck)
-    h += '<button class="primary" onclick="pycmd(\'hskfind:' +
-         esc(d.word) + '\')">Open in browser</button>';
-  h += '<button onclick="hideInfo()">Close</button></div>';
-  c.innerHTML = h;
-  document.getElementById('ov').classList.add('show');
-}
-"""
-
-
-def _panel_html(lvl, words, status):
-    color = LEVEL_COLORS[lvl]
-    n = len(words)
-    reviewed = sum(1 for w in words if status.get(w) == 2)
-    indeck = sum(1 for w in words if status.get(w) == 1)
-    covered = reviewed + indeck
-    pct = 100.0 * covered / n if n else 0.0
-    tiles = []
-    for w in words:
-        st = status.get(w, 0)
-        cls = ("st-r", "st-d")[st == 1] if st else "st-a"
-        we = html_mod.escape(w, quote=True)
-        tiles.append('<span class="t %s" data-w="%s">%s</span>'
-                     % (cls, we, html_mod.escape(w)))
-    return """
-<div class="panel" style="--c:%s">
-  <div class="panel-head">
-    <span class="lvl">%s</span>
-    <span class="pct">%.0f%%</span>
-    <span class="stat">%d reviewed · %d unreviewed · %d missing</span>
-  </div>
-  <div class="bar">
-    <div class="r" style="width:%.2f%%"></div>
-    <div class="d" style="width:%.2f%%"></div>
-  </div>
-  <div class="tiles">%s</div>
-</div>""" % (
-        color, level_label(lvl), pct,
-        reviewed, indeck, n - covered,
-        100.0 * reviewed / n if n else 0,
-        100.0 * indeck / n if n else 0,
-        "".join(tiles),
-    )
-
-
-def build_html(levels_words, status, version_label, deck_name, field_name,
-               night=False):
-    total = sum(len(v) for v in levels_words.values())
-    reviewed = sum(1 for ws in levels_words.values()
-                   for w in ws if status.get(w) == 2)
-    indeck = sum(1 for ws in levels_words.values()
-                 for w in ws if status.get(w) == 1)
-    covered = reviewed + indeck
-    pct = 100.0 * covered / total if total else 0.0
-
-    panels = "".join(_panel_html(lvl, ws, status)
-                     for lvl, ws in sorted(levels_words.items()))
-    js = JS % {"colors": json.dumps(LEVEL_COLORS)}
-
-    return """<!doctype html><html><head><meta charset="utf-8">
-<style>%s</style></head>
-<body class="%s">
-  <div class="summary">
-    <span class="big">%.1f%%</span>
-    <span class="sub"><b>%d</b> of <b>%d</b> %s words in <b>%s</b>
-      (%d reviewed) · matching field “%s”</span>
-  </div>
-  <div class="board">%s</div>
-  <div class="legend">
-    <span><span class="t st-r" style="background:#94a3b8;color:#fff">爱</span>
-      in deck, reviewed</span>
-    <span><span class="t st-d" style="border-color:#94a3b8">爱</span>
-      in deck, not yet reviewed</span>
-    <span><span class="t st-a">爱</span> not in deck</span>
-    <span>hover to zoom · click for details</span>
-  </div>
-  <div id="ov"><div id="card"></div></div>
-  <script>%s</script>
-</body></html>""" % (
-        CSS, "night" if night else "",
-        pct, covered, total,
-        html_mod.escape(version_label), html_mod.escape(deck_name),
-        reviewed, html_mod.escape(field_name),
-        panels, js,
-    )
-
-
 # ---------------------------------------------------------------- dialog
 
 class HSKCoverageDialog(QDialog):
@@ -440,10 +281,16 @@ class HSKCoverageDialog(QDialog):
         self.setWindowTitle("HSK Coverage Map")
         self.resize(1250, 860)
         self.vocab = get_vocab()
+        self.known = load_known()
         self._scan_cache = {}  # (deck, field) -> (field_map, reviewed)
+        self._tile_index = {}  # display word -> tile (current version)
+        self._alias_index = {}  # alias text -> [display words]
+        self._last_levels = {}
+        self._last_status = {}
         self._loading = True
 
         cfg = mw.addonManager.getConfig(__name__) or {}
+        self.collapsed = cfg.get("collapsed") or {}
 
         top = QHBoxLayout()
         top.addWidget(QLabel("Deck:"))
@@ -464,7 +311,7 @@ class HSKCoverageDialog(QDialog):
         top.addSpacing(10)
         top.addWidget(QLabel("Word list:"))
         self.ver_box = QComboBox()
-        for key, label, _mx in VERSIONS:
+        for key, label, _folder, _sfx in VERSIONS:
             self.ver_box.addItem(label, key)
         idx = self.ver_box.findData(cfg.get("version", "newest"))
         if idx >= 0:
@@ -472,32 +319,70 @@ class HSKCoverageDialog(QDialog):
         top.addWidget(self.ver_box)
 
         top.addSpacing(10)
-        self.chk79 = QCheckBox("Include HSK 7–9")
-        self.chk79.setChecked(bool(cfg.get("include79", False)))
-        top.addWidget(self.chk79)
+        self.chk_known = QCheckBox("Include words marked known")
+        self.chk_known.setChecked(bool(cfg.get("show_known", True)))
+        self.chk_known.setToolTip(
+            "Right-click a word on the map to mark it as one you already "
+            "know without an Anki card. Uncheck to see only real deck "
+            "coverage.")
+        top.addWidget(self.chk_known)
 
         top.addStretch()
         refresh = QPushButton("Rescan deck")
         qconnect(refresh.clicked, self.rescan)
         top.addWidget(refresh)
 
+        self._gear = QPushButton("Options")
+        self._gear.setToolTip("Known-words database & debug files")
+        qconnect(self._gear.clicked, self.open_settings_menu)
+        top.addWidget(self._gear)
+
         self.web = AnkiWebView(self)
         self.web.set_bridge_command(self.on_bridge, self)
+        # let the page handle right-clicks (mark-known) itself
+        self.web.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+
+        # Cmd/Ctrl +, -, 0 scale the interface (also handled in-page, so
+        # they work whether the webview or a control has focus)
+        self._zoom = float(cfg.get("zoom", 1.0))
+        self.web.setZoomFactor(self._zoom)
+        for seq, fn in (("Ctrl+=", self.zoom_in), ("Ctrl++", self.zoom_in),
+                        ("Ctrl+-", self.zoom_out), ("Ctrl+_", self.zoom_out),
+                        ("Ctrl+0", self.zoom_reset)):
+            sc = QShortcut(QKeySequence(seq), self)
+            qconnect(sc.activated, fn)
 
         layout = QVBoxLayout(self)
         layout.addLayout(top)
         layout.addWidget(self.web)
 
+        self._known_file = cfg.get("known_file") or ""
         self._preferred_field = cfg.get("field", "")
         self.populate_fields()
         self._loading = False
 
         qconnect(self.deck_box.currentIndexChanged, self.on_deck_changed)
         qconnect(self.field_box.currentIndexChanged, self.render)
-        qconnect(self.ver_box.currentIndexChanged, self.on_version_changed)
-        qconnect(self.chk79.stateChanged, self.render)
+        qconnect(self.ver_box.currentIndexChanged, self.render)
+        qconnect(self.chk_known.stateChanged, self.on_known_toggle)
 
-        self.on_version_changed()
+        # live-update the map when a note is added in the Add dialog —
+        # event-driven (no polling), patched in place (no deck rescan)
+        try:
+            from aqt import gui_hooks
+            gui_hooks.add_cards_did_add_note.append(self._on_note_added)
+        except (ImportError, AttributeError):
+            pass
+
+        self.render()
+
+    def closeEvent(self, evt):
+        try:
+            from aqt import gui_hooks
+            gui_hooks.add_cards_did_add_note.remove(self._on_note_added)
+        except (ImportError, AttributeError, ValueError):
+            pass
+        super().closeEvent(evt)
 
     # -- ui state
 
@@ -516,14 +401,6 @@ class HSKCoverageDialog(QDialog):
         self.populate_fields()
         self.render()
 
-    def on_version_changed(self, *_):
-        ver = self.ver_box.currentData()
-        has79 = VERSION_MAX.get(ver, 6) >= 7
-        self.chk79.setEnabled(has79)
-        self.chk79.setToolTip(
-            "" if has79 else "HSK 2.0 has no bands 7–9")
-        self.render()
-
     def rescan(self):
         deck = self.deck_box.currentText()
         for key in [k for k in self._scan_cache if k[0] == deck]:
@@ -531,41 +408,276 @@ class HSKCoverageDialog(QDialog):
         self.populate_fields()
         self.render()
 
+    # -- settings menu
+
+    def open_settings_menu(self):
+        m = QMenu(self)
+        info = m.addAction("Known words: %s" % known_path())
+        info.setEnabled(False)
+        qconnect(m.addAction("Show known-words file in folder").triggered,
+                 self.reveal_known_file)
+        qconnect(m.addAction("Use existing known-words file…").triggered,
+                 self.pick_known_file)
+        qconnect(m.addAction("Move known words to a new file…").triggered,
+                 self.create_known_file)
+        m.addSeparator()
+        qconnect(m.addAction("Show debug log in folder").triggered,
+                 lambda: self._reveal(DEBUG_LOG))
+        m.exec(self._gear.mapToGlobal(self._gear.rect().bottomLeft()))
+
+    def _reveal(self, path):
+        folder = os.path.dirname(path)
+        try:
+            from aqt.utils import openFolder
+            openFolder(folder)
+        except Exception:
+            from aqt.qt import QDesktopServices, QUrl
+            QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+
+    def reveal_known_file(self):
+        save_known(self.known)   # make sure the file exists before showing it
+        self._reveal(known_path())
+
+    def _set_known_file(self, path, load):
+        path = os.path.abspath(path)
+        self._known_file = (
+            "" if path == os.path.abspath(KNOWN_PATH) else path)
+        self.write_config()
+        if load:
+            self.known = load_known(path)
+        else:
+            save_known(self.known, path)
+        debug_line("known-words file -> %s" % path)
+        self.render()
+
+    def pick_known_file(self):
+        """Point the add-on at an existing known-words JSON (e.g. a backup
+        kept outside the add-on folder) and load it."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Use existing known-words file",
+            os.path.dirname(known_path()), "JSON files (*.json)")
+        if path:
+            self._set_known_file(path, load=True)
+
+    def create_known_file(self):
+        """Write the current known words to a new location and use it from
+        now on — keeps the list safe across add-on removal/reinstall."""
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Move known words to", known_path(), "JSON files (*.json)")
+        if path:
+            self._set_known_file(path, load=False)
+
+    def collapsed_levels(self, ver):
+        default = [7] if VERSION_MAX[ver] >= 7 else []
+        return set(self.collapsed.get(ver, default))
+
+    # -- zoom
+
+    def set_zoom(self, z):
+        self._zoom = max(0.5, min(2.5, round(z, 2)))
+        self.web.setZoomFactor(self._zoom)
+        self.write_config()
+
+    def zoom_in(self):
+        self.set_zoom(self._zoom + 0.1)
+
+    def zoom_out(self):
+        self.set_zoom(self._zoom - 0.1)
+
+    def zoom_reset(self):
+        self.set_zoom(1.0)
+
+    def on_known_toggle(self, *_):
+        """Patch known-word tiles and header numbers in place — no page
+        rebuild, so the board doesn't shift under the user."""
+        if self._loading:
+            return
+        if not self._last_levels:
+            self.render()
+            return
+        changed = []
+        for word in self.known:
+            tile = self._tile_index.get(word)
+            if tile is None:
+                continue
+            st = self.effective_status(word, tile["aliases"])
+            if self._last_status.get(word) != st:
+                self._last_status[word] = st
+                changed.append({"w": word, "status": st})
+        panels, summary = self.board_stats()
+        self.web.eval("applyBulkPatch(%s)" % json.dumps(
+            {"words": changed, "panels": panels, "summary": summary}))
+        self.write_config()
+
+    # -- live update on note add
+
+    def _on_note_added(self, note):
+        """AddCards hook: patch the new note's word into the open map
+        without a deck rescan. Covers the Add dialog only — imports and
+        syncs still go through the Rescan button."""
+        try:
+            self._apply_new_note(note)
+        except Exception:
+            debug_line("note-add patch error:\n" + traceback.format_exc())
+
+    def _apply_new_note(self, note):
+        deck = self.deck_box.currentText()
+        field = self.field_box.currentText()
+        key = (deck, field)
+        if not deck or not field or key not in self._scan_cache:
+            return
+        # only notes landing in the selected deck or one of its subdecks
+        names = (mw.col.decks.name(c.did) for c in note.cards())
+        if not any(n == deck or n.startswith(deck + "::") for n in names):
+            return
+        pos = None
+        for i, fld in enumerate(note.note_type()["flds"]):
+            if fld["name"] == field:
+                pos = i
+                break
+        if pos is None or pos >= len(note.fields):
+            return
+        txt = _clean(note.fields[pos])
+        if not txt:
+            return
+        texts = {txt}
+        hz = _hanzi_only(txt)
+        if hz:
+            texts.add(hz)
+        field_map, _reviewed = self._scan_cache[key]
+        changed = []
+        for t in texts:
+            field_map[t].add(note.id)
+        for t in texts:
+            for word in self._alias_index.get(t, ()):
+                tile = self._tile_index.get(word)
+                st = self.effective_status(word, tile["aliases"])
+                if self._last_status.get(word) != st:
+                    self._last_status[word] = st
+                    changed.append({"w": word, "status": st})
+        if not changed:
+            return
+        debug_line("note-add patch: %s -> %s"
+                   % (txt, [c["w"] for c in changed]))
+        panels, summary = self.board_stats()
+        self.web.eval("applyBulkPatch(%s)" % json.dumps(
+            {"words": changed, "panels": panels, "summary": summary}))
+
     # -- bridge
 
     def on_bridge(self, cmd):
+        debug_line("bridge: %s" % cmd)
+        try:
+            return self._dispatch(cmd)
+        except Exception:
+            debug_line("bridge error:\n" + traceback.format_exc())
+            raise
+
+    def _dispatch(self, cmd):
         if cmd.startswith("hskinfo:"):
             return self.word_info(cmd[len("hskinfo:"):])
+        if cmd.startswith("hskknown:"):
+            return self.toggle_known(cmd[len("hskknown:"):])
+        if cmd.startswith("hsktoggle:"):
+            self.toggle_collapsed(cmd[len("hsktoggle:"):])
+            return None
         if cmd.startswith("hskfind:"):
-            word = cmd[len("hskfind:"):]
-            deck = self.deck_box.currentText()
-            from aqt import dialogs
-            browser = dialogs.open("Browser", mw)
-            browser.search_for('deck:"%s" "%s"' % (deck, word))
+            self.open_in_browser(cmd[len("hskfind:"):])
+            return None
+        if cmd.startswith("hskzoom:"):
+            action = cmd[len("hskzoom:"):]
+            if action == "in":
+                self.zoom_in()
+            elif action == "out":
+                self.zoom_out()
+            elif action == "reset":
+                self.zoom_reset()
         return None
 
-    def word_info(self, word):
-        info = self.vocab.words.get(word)
-        if not info:
-            return json.dumps({"word": word, "forms": [], "levels": [],
-                               "in_deck": False, "status_text": "",
-                               "color": "#888"})
-        status = self._status_for(word)
+    def open_in_browser(self, word):
+        """Open the browser on the exact notes the scan matched for this
+        word; falls back to a field-qualified text search."""
+        tile = self._tile_index.get(word)
+        aliases = tile["aliases"] if tile else [word.replace("…", "")]
+        field_map, _reviewed = self._scan()
+        nids = set()
+        for alias in aliases:
+            nids |= field_map.get(alias, set())
+        if nids:
+            query = "nid:" + ",".join(str(n) for n in sorted(nids)[:100])
+        else:
+            query = 'deck:"%s" %s' % (
+                self.deck_box.currentText(),
+                self._field_term(self.field_box.currentText(),
+                                 word.replace("…", "")))
+        from aqt import dialogs
+        browser = dialogs.open("Browser", mw)
+        browser.search_for(query)
+
+    @staticmethod
+    def _field_term(field, word):
+        """A field-qualified search term: Hanzi:"出", quoted as a whole
+        when the field name itself needs quoting."""
+        word = word.replace('"', "")
+        if not field:
+            return '"%s"' % word
+        if " " in field or ":" in field or '"' in field:
+            return '"%s:%s"' % (field.replace('"', ""), word)
+        return '%s:"%s"' % (field, word)
+
+    def toggle_collapsed(self, lvl_str):
+        try:
+            lvl = int(lvl_str)
+        except ValueError:
+            return
         ver = self.ver_box.currentData()
-        my_levels = sorted(t for t in info["levels"] if t.startswith(ver + "-"))
-        other = sorted(t for t in info["levels"] if not t.startswith(ver + "-"))
-        lvl_num = int(my_levels[0].split("-")[1]) if my_levels else 0
-        status_text = {
-            2: "In your deck — reviewed.",
-            1: "In your deck — not reviewed yet.",
-            0: "Not in your deck.",
-        }[status]
+        levels = self.collapsed_levels(ver)
+        levels.symmetric_difference_update({lvl})
+        self.collapsed[ver] = sorted(levels)
+        self.write_config()
+
+    def toggle_known(self, word):
+        """Right-click: flip a word's known flag, persist, return a JSON
+        patch (tile status + refreshed header numbers) for the page."""
+        if word in self.known:
+            self.known.discard(word)
+        else:
+            self.known.add(word)
+        save_known(self.known)
+
+        tile = self._tile_index.get(word)
+        aliases = tile["aliases"] if tile else [word]
+        self._last_status[word] = self.effective_status(word, aliases)
+        panels, summary = self.board_stats()
         return json.dumps({
             "word": word,
-            "forms": info["forms"],
+            "status": self._last_status[word],
+            "panels": panels,
+            "summary": summary,
+        })
+
+    def word_info(self, word):
+        tile = self._tile_index.get(word)
+        aliases = tile["aliases"] if tile else [word]
+        _key, info = self.vocab.dict_info(word, aliases)
+        base = self._status(aliases)
+        ver = self.ver_box.currentData()
+        tags = self.vocab.tags_for(word)
+        my_levels = [t for t in tags if t.startswith(ver + "-")]
+        other = [t for t in tags if not t.startswith(ver + "-")]
+        lvl_num = int(my_levels[0].split("-")[1]) if my_levels else 0
+        if base > 0:
+            state = "deck"
+        elif word in self.known:
+            state = "known"
+        else:
+            state = "unknown"
+        return json.dumps({
+            "word": word,
+            "forms": info["forms"] if info else [],
+            "bases": self.vocab.erhua_bases(info) if info else [],
             "levels": my_levels + other,
-            "in_deck": status > 0,
-            "status_text": status_text,
+            "state": state,
             "color": LEVEL_COLORS.get(lvl_num, "#888"),
         })
 
@@ -579,14 +691,42 @@ class HSKCoverageDialog(QDialog):
             self._scan_cache[key] = scan_deck(deck, field)
         return self._scan_cache[key]
 
-    def _status_for(self, word):
+    def _status(self, aliases):
         field_map, reviewed = self._scan()
         nids = set()
-        for alias in self.vocab.aliases(word):
+        for alias in aliases:
             nids |= field_map.get(alias, set())
         if not nids:
             return 0
         return 2 if nids & reviewed else 1
+
+    def effective_status(self, word, aliases):
+        if self.chk_known.isChecked() and word in self.known:
+            return 2
+        return self._status(aliases)
+
+    def board_stats(self):
+        """Per-panel header numbers + top summary (summary covers HSK 1-6
+        only, matching the page header)."""
+        panels = []
+        reviewed = indeck = total = 0
+        cum = 0
+        for lvl, tiles in sorted(self._last_levels.items()):
+            r, d, n = counts(tiles, self._last_status)
+            cum += n
+            if lvl <= 6:
+                reviewed += r
+                indeck += d
+                total += n
+            panels.append(panel_stats(lvl, tiles, self._last_status,
+                                      cum_total=cum))
+        covered = reviewed + indeck
+        summary = {
+            "pct": "%.1f%%" % (100.0 * covered / total if total else 0.0),
+            "covered": str(covered),
+            "reviewed": str(reviewed),
+        }
+        return panels, summary
 
     # -- render
 
@@ -603,30 +743,39 @@ class HSKCoverageDialog(QDialog):
                 "containing the Chinese word.</body></html>")
             return
 
-        max_lvl = VERSION_MAX[ver]
-        top = 7 if (max_lvl >= 7 and self.chk79.isChecked()) else 6
-        levels_words = {lvl: self.vocab.levels[ver][lvl]
-                        for lvl in range(1, top + 1)
-                        if lvl in self.vocab.levels[ver]}
+        levels_tiles = {lvl: self.vocab.levels[ver][lvl]
+                        for lvl in range(1, VERSION_MAX[ver] + 1)}
 
-        field_map, reviewed = self._scan()
+        self._tile_index = {}
         status = {}
-        for ws in levels_words.values():
-            for w in ws:
-                if w in status:
-                    continue
-                nids = set()
-                for alias in self.vocab.aliases(w):
-                    nids |= field_map.get(alias, set())
-                status[w] = 0 if not nids else (2 if nids & reviewed else 1)
+        for tiles in levels_tiles.values():
+            for t in tiles:
+                self._tile_index.setdefault(t["w"], t)
+                if t["w"] not in status:
+                    status[t["w"]] = self.effective_status(
+                        t["w"], t["aliases"])
+        self._alias_index = {}
+        for w, t in self._tile_index.items():
+            for a in t["aliases"]:
+                self._alias_index.setdefault(a, []).append(w)
+        self._last_levels = levels_tiles
+        self._last_status = status
 
-        page = build_html(levels_words, status, self.ver_box.currentText(),
-                          deck, field, night=theme_manager.night_mode)
+        page = build_html(levels_tiles, status, self.ver_box.currentText(),
+                          deck, field, night=theme_manager.night_mode,
+                          collapsed_levels=self.collapsed_levels(ver))
         self.web.setHtml(page)
+        self.write_config()
 
+    def write_config(self):
         mw.addonManager.writeConfig(__name__, {
-            "deck": deck, "field": field, "version": ver,
-            "include79": self.chk79.isChecked(),
+            "deck": self.deck_box.currentText(),
+            "field": self.field_box.currentText(),
+            "version": self.ver_box.currentData(),
+            "show_known": self.chk_known.isChecked(),
+            "collapsed": self.collapsed,
+            "zoom": self._zoom,
+            "known_file": self._known_file,
         })
 
 
@@ -636,6 +785,8 @@ _dialog = None
 
 def show_dialog():
     global _dialog
+    start_watchdog()
+    debug_line("dialog opened")
     _dialog = HSKCoverageDialog(mw)
     _dialog.show()
 
@@ -646,3 +797,9 @@ def setup_menu():
     mw.form.menuTools.addAction(action)
 
 setup_menu()
+
+try:
+    # dump Python stacks into debug.log on a hard crash (segfault etc.)
+    faulthandler.enable(_debug_file())
+except (OSError, RuntimeError):
+    pass
