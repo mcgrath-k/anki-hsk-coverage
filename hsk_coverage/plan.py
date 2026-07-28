@@ -16,6 +16,7 @@ known) into a suggested study order, fully offline, from three signals:
 plus a mild earlier-level bonus as a tie-break.
 """
 
+import bisect
 import re
 
 _HAN_RE = re.compile(r"[㐀-鿿]")
@@ -107,14 +108,26 @@ def recommend(levels_tiles, status, freq, limit=100,
         })
 
     if mode == "freq":
-        # frequency alone decides the order; the note under each word
-        # only states how common it is
+        # frequency alone decides the order; the note shows the word's
+        # rank among all HSK words so the ordering is verifiable — the
+        # corpus data is binned at 0.01 zipf, so words sharing a rank
+        # are exactly tied there (broken by earlier level, then text)
+        asc = sorted(z for z in freq.values() if z > 0)
+        n = len(asc)
         for it in items:
-            it["reason"] = it["freq_reason"]
+            z = it["zipf"]
+            if z > 0:
+                note = "#%d most common" % (
+                    n - bisect.bisect_right(asc, z) + 1)
+                if it["freq_reason"]:
+                    note += " · " + it["freq_reason"]
+            else:
+                note = "no frequency data"
+            it["reason"] = note
         if by_level:
             items.sort(key=lambda x: (x["lvl"], -x["zipf"], x["w"]))
         else:
-            items.sort(key=lambda x: (-x["zipf"], x["w"]))
+            items.sort(key=lambda x: (-x["zipf"], x["lvl"], x["w"]))
     elif by_level:
         items.sort(key=lambda x: (x["lvl"], -x["score"], -x["zipf"], x["w"]))
     else:
