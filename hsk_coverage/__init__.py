@@ -320,8 +320,8 @@ class HSKCoverageDialog(QDialog):
         self._plan_open = bool(cfg.get("plan_open", False))
         pm = cfg.get("plan_mode", "smart")
         self._plan_mode = pm if pm in ("smart", "board", "freq") else "smart"
-        pl = cfg.get("plan_levels", "blend")
-        self._plan_levels = pl if pl in ("blend", "level") else "blend"
+        pl = cfg.get("plan_levels", "level")
+        self._plan_levels = pl if pl in ("blend", "level") else "level"
         self._intro_seen = bool(cfg.get("intro_seen", False))
         try:
             self._plan_width = max(240, min(640,

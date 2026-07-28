@@ -834,7 +834,7 @@ def _panel_html(lvl, tiles, status, cum_total, collapsed):
 def build_html(levels_tiles, status, version_label, deck_name, field_name,
                night=False, collapsed_levels=(), extra_js="",
                nav_mode="all", known_file="", plan=None, plan_open=False,
-               plan_mode="smart", plan_levels="blend", show_intro=False,
+               plan_mode="smart", plan_levels="level", show_intro=False,
                plan_width=332):
     panels = []
     reviewed = indeck = total = 0       # HSK 1-6 only, for the top summary
