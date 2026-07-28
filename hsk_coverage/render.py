@@ -161,7 +161,10 @@ body.planopen #plan { right:0; }
 #ov.show, #oov.show, #iov.show { opacity:1; visibility:visible;
   transition:opacity .12s ease; }
 .ibody { font-size:13.5px; line-height:1.55; margin-top:8px; }
-.ibody .t { cursor:default; flex:0 0 auto; }
+/* inline-block so the tile's padding grows its line box — plain inline
+   padding overlaps the neighboring lines */
+.ibody .t { cursor:default; display:inline-block; margin:3px 6px 3px 0;
+  vertical-align:middle; }
 .ibody .t:hover { transform:none; }
 .idots { display:flex; gap:6px; justify-content:center;
   margin:16px 0 4px 0; }
