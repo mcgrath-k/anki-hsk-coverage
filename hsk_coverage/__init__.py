@@ -24,7 +24,7 @@ from collections import defaultdict
 from aqt import mw
 from aqt.qt import (
     QDialog, QVBoxLayout, QHBoxLayout, QComboBox, QCheckBox, QLabel,
-    QPushButton, QShortcut, QKeySequence, QMenu, QFileDialog, QTimer,
+    QPushButton, QShortcut, QKeySequence, QFileDialog, QTimer, QEvent,
     Qt, qconnect,
 )
 from aqt.webview import AnkiWebView
@@ -34,6 +34,7 @@ from .vocab import (
     Vocab, VERSIONS, VERSION_MAX, CEDICT_PATH, download_cedict,
 )
 from .render import LEVEL_COLORS, build_html, panel_stats, counts
+from .plan import recommend
 
 KNOWN_PATH = os.path.join(
     os.path.dirname(__file__), "user_files", "known_words.json")
@@ -86,8 +87,14 @@ class _Watchdog:
         threading.Thread(target=self._poll, daemon=True).start()
 
     def _on_beat(self):
-        self._beat = time.monotonic()
-        self._reported = False
+        now = time.monotonic()
+        if self._reported:
+            # the stall a dump was written for has ended — record for how
+            # long the main thread was actually gone
+            debug_line("watchdog: main thread recovered after %.1fs stall"
+                       % (now - self._beat))
+            self._reported = False
+        self._beat = now
 
     def _poll(self):
         while True:
@@ -105,6 +112,23 @@ class _Watchdog:
                     f.write("==== end of dump ====\n")
                 except OSError:
                     pass
+
+
+def _env_line():
+    """One line of version/context info, so every debug.log correlates a
+    problem with the environment it happened in."""
+    try:
+        from aqt import appVersion
+    except Exception:
+        appVersion = "?"
+    try:
+        from aqt.qt import QT_VERSION_STR
+    except Exception:
+        QT_VERSION_STR = "?"
+    import platform
+    return "env: anki=%s qt=%s os=%s night=%s" % (
+        appVersion, QT_VERSION_STR, platform.platform(),
+        theme_manager.night_mode)
 
 
 _watchdog = None
@@ -291,6 +315,14 @@ class HSKCoverageDialog(QDialog):
 
         cfg = mw.addonManager.getConfig(__name__) or {}
         self.collapsed = cfg.get("collapsed") or {}
+        nm = cfg.get("nav_mode", "all")
+        self._nav_mode = nm if nm in ("all", "unknown", "covered") else "all"
+        self._plan_open = bool(cfg.get("plan_open", False))
+        pm = cfg.get("plan_mode", "smart")
+        self._plan_mode = pm if pm in ("smart", "board") else "smart"
+        pl = cfg.get("plan_levels", "blend")
+        self._plan_levels = pl if pl in ("blend", "level") else "blend"
+        self._intro_seen = bool(cfg.get("intro_seen", False))
 
         top = QHBoxLayout()
         top.addWidget(QLabel("Deck:"))
@@ -333,8 +365,9 @@ class HSKCoverageDialog(QDialog):
         top.addWidget(refresh)
 
         self._gear = QPushButton("Options")
-        self._gear.setToolTip("Known-words database & debug files")
-        qconnect(self._gear.clicked, self.open_settings_menu)
+        self._gear.setToolTip(
+            "Arrow-key cycling, known-words database & debug files")
+        qconnect(self._gear.clicked, self.open_options)
         top.addWidget(self._gear)
 
         self.web = AnkiWebView(self)
@@ -374,7 +407,39 @@ class HSKCoverageDialog(QDialog):
         except (ImportError, AttributeError):
             pass
 
+        # geometry diagnostics for the runaway-window-growth report: log
+        # every size change of this dialog, the webview and the main
+        # window, with whether it came from the window system
+        # (spontaneous) or from Qt code calling resize()
+        self._geo_last = {}
+        mw.installEventFilter(self)
+        self.web.installEventFilter(self)
+
+        debug_line("dialog cfg: zoom=%.2f deck=%r field=%r list=%s"
+                   % (self._zoom, self.deck_box.currentText(),
+                      self.field_box.currentText(),
+                      self.ver_box.currentData()))
         self.render()
+
+    def _log_geometry(self, name, obj, evt):
+        size = "%dx%d" % (obj.width(), obj.height())
+        if self._geo_last.get(name) == size:
+            return
+        self._geo_last[name] = size
+        debug_line("geo: %s resized to %s spontaneous=%s"
+                   % (name, size, evt.spontaneous()))
+
+    def eventFilter(self, obj, evt):
+        if evt.type() == QEvent.Type.Resize:
+            if obj is mw:
+                self._log_geometry("mw", mw, evt)
+            elif obj is self.web:
+                self._log_geometry("web", self.web, evt)
+        return False
+
+    def resizeEvent(self, evt):
+        self._log_geometry("dialog", self, evt)
+        super().resizeEvent(evt)
 
     def closeEvent(self, evt):
         try:
@@ -382,6 +447,8 @@ class HSKCoverageDialog(QDialog):
             gui_hooks.add_cards_did_add_note.remove(self._on_note_added)
         except (ImportError, AttributeError, ValueError):
             pass
+        mw.removeEventFilter(self)
+        self.web.removeEventFilter(self)
         super().closeEvent(evt)
 
     # -- ui state
@@ -408,22 +475,10 @@ class HSKCoverageDialog(QDialog):
         self.populate_fields()
         self.render()
 
-    # -- settings menu
+    # -- options popup (rendered in the page, same styling as the info card)
 
-    def open_settings_menu(self):
-        m = QMenu(self)
-        info = m.addAction("Known words: %s" % known_path())
-        info.setEnabled(False)
-        qconnect(m.addAction("Show known-words file in folder").triggered,
-                 self.reveal_known_file)
-        qconnect(m.addAction("Use existing known-words file…").triggered,
-                 self.pick_known_file)
-        qconnect(m.addAction("Move known words to a new file…").triggered,
-                 self.create_known_file)
-        m.addSeparator()
-        qconnect(m.addAction("Show debug log in folder").triggered,
-                 lambda: self._reveal(DEBUG_LOG))
-        m.exec(self._gear.mapToGlobal(self._gear.rect().bottomLeft()))
+    def open_options(self):
+        self.web.eval("if (window.showOptions) showOptions()")
 
     def _reveal(self, path):
         folder = os.path.dirname(path)
@@ -506,7 +561,8 @@ class HSKCoverageDialog(QDialog):
                 changed.append({"w": word, "status": st})
         panels, summary = self.board_stats()
         self.web.eval("applyBulkPatch(%s)" % json.dumps(
-            {"words": changed, "panels": panels, "summary": summary}))
+            {"words": changed, "panels": panels, "summary": summary,
+             "plan": self.study_plan()}))
         self.write_config()
 
     # -- live update on note add
@@ -561,7 +617,8 @@ class HSKCoverageDialog(QDialog):
                    % (txt, [c["w"] for c in changed]))
         panels, summary = self.board_stats()
         self.web.eval("applyBulkPatch(%s)" % json.dumps(
-            {"words": changed, "panels": panels, "summary": summary}))
+            {"words": changed, "panels": panels, "summary": summary,
+             "plan": self.study_plan()}))
 
     # -- bridge
 
@@ -583,6 +640,41 @@ class HSKCoverageDialog(QDialog):
             return None
         if cmd.startswith("hskfind:"):
             self.open_in_browser(cmd[len("hskfind:"):])
+            return None
+        if cmd.startswith("hskpane:"):
+            self._plan_open = cmd[len("hskpane:"):] == "1"
+            self.write_config()
+            return None
+        if cmd.startswith("hskplan:"):
+            kind, _, val = cmd[len("hskplan:"):].partition(":")
+            if kind == "mode" and val in ("smart", "board"):
+                self._plan_mode = val
+            elif kind == "levels" and val in ("blend", "level"):
+                self._plan_levels = val
+            else:
+                return None
+            self.write_config()
+            return json.dumps(self.study_plan())
+        if cmd == "hskintro:done":
+            self._intro_seen = True
+            self.write_config()
+            return None
+        if cmd.startswith("hsknav:"):
+            mode = cmd[len("hsknav:"):]
+            if mode in ("all", "unknown", "covered"):
+                self._nav_mode = mode
+                self.write_config()
+            return None
+        if cmd.startswith("hskopt:"):
+            action = cmd[len("hskopt:"):]
+            if action == "reveal":
+                self.reveal_known_file()
+            elif action == "pick":
+                self.pick_known_file()
+            elif action == "move":
+                self.create_known_file()
+            elif action == "debug":
+                self._reveal(DEBUG_LOG)
             return None
         if cmd.startswith("hskzoom:"):
             action = cmd[len("hskzoom:"):]
@@ -654,6 +746,7 @@ class HSKCoverageDialog(QDialog):
             "status": self._last_status[word],
             "panels": panels,
             "summary": summary,
+            "plan": self.study_plan(),
         })
 
     def word_info(self, word):
@@ -705,6 +798,21 @@ class HSKCoverageDialog(QDialog):
             return 2
         return self._status(aliases)
 
+    def study_plan(self):
+        """Ranked study recommendations for the side pane, enriched with
+        pinyin, a first definition and the level color."""
+        items, total = recommend(self._last_levels, self._last_status,
+                                 self.vocab.freq,
+                                 mode=self._plan_mode,
+                                 by_level=self._plan_levels == "level")
+        for it in items:
+            tile = self._tile_index.get(it["w"])
+            _key, info = self.vocab.dict_info(
+                it["w"], tile["aliases"] if tile else ())
+            it["py"], it["def"] = self.vocab.best_gloss(info)
+            it["color"] = LEVEL_COLORS.get(it["lvl"], "#888")
+        return {"items": items, "total": total}
+
     def board_stats(self):
         """Per-panel header numbers + top summary (summary covers HSK 1-6
         only, matching the page header)."""
@@ -722,7 +830,9 @@ class HSKCoverageDialog(QDialog):
                                       cum_total=cum))
         covered = reviewed + indeck
         summary = {
-            "pct": "%.1f%%" % (100.0 * covered / total if total else 0.0),
+            # headline percentage counts reviewed-or-known words only,
+            # matching build_html
+            "pct": "%.1f%%" % (100.0 * reviewed / total if total else 0.0),
             "covered": str(covered),
             "reviewed": str(reviewed),
         }
@@ -763,7 +873,13 @@ class HSKCoverageDialog(QDialog):
 
         page = build_html(levels_tiles, status, self.ver_box.currentText(),
                           deck, field, night=theme_manager.night_mode,
-                          collapsed_levels=self.collapsed_levels(ver))
+                          collapsed_levels=self.collapsed_levels(ver),
+                          nav_mode=self._nav_mode, known_file=known_path(),
+                          plan=self.study_plan(),
+                          plan_open=self._plan_open,
+                          plan_mode=self._plan_mode,
+                          plan_levels=self._plan_levels,
+                          show_intro=not self._intro_seen)
         self.web.setHtml(page)
         self.write_config()
 
@@ -776,6 +892,11 @@ class HSKCoverageDialog(QDialog):
             "collapsed": self.collapsed,
             "zoom": self._zoom,
             "known_file": self._known_file,
+            "nav_mode": self._nav_mode,
+            "plan_open": self._plan_open,
+            "plan_mode": self._plan_mode,
+            "plan_levels": self._plan_levels,
+            "intro_seen": self._intro_seen,
         })
 
 
@@ -786,7 +907,7 @@ _dialog = None
 def show_dialog():
     global _dialog
     start_watchdog()
-    debug_line("dialog opened")
+    debug_line("dialog opened · " + _env_line())
     _dialog = HSKCoverageDialog(mw)
     _dialog.show()
 

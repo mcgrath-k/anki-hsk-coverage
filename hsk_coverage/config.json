@@ -5,5 +5,10 @@
   "show_known": true,
   "collapsed": {},
   "zoom": 1.0,
-  "known_file": ""
+  "known_file": "",
+  "nav_mode": "all",
+  "plan_open": false,
+  "plan_mode": "smart",
+  "plan_levels": "blend",
+  "intro_seen": false
 }
