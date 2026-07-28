@@ -579,7 +579,10 @@ class HSKCoverageDialog(QDialog):
         try:
             self._apply_new_note(note)
         except Exception:
+            # log for correlation, then let Anki's central exception
+            # handler surface the error instead of failing silently
             debug_line("note-add patch error:\n" + traceback.format_exc())
+            raise
 
     def _apply_new_note(self, note):
         deck = self.deck_box.currentText()
