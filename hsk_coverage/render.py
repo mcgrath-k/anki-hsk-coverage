@@ -420,7 +420,7 @@ function renderPlanCtl(){
     return h + '</span>';
   }
   var h = grp('Word Order:', 'mode', PLAN_MODE,
-              [['board', 'Board order'], ['smart', 'Smart order'],
+              [['board', 'Alphabetical'], ['smart', 'Smart'],
                ['freq', 'Frequency']]);
   if (PLAN_MODE !== 'board')
     h += grp('HSK Order:', 'levels', PLAN_LEVELS,
@@ -433,7 +433,7 @@ function togglePlanHelp(){
   var el = document.getElementById('plan-help');
   if (el.style.display === 'block'){ el.style.display = 'none'; return; }
   var h = '';
-  [['Board order', 'board'], ['Smart order', 'smart'],
+  [['Alphabetical', 'board'], ['Smart', 'smart'],
    ['Frequency', 'freq'],
    ['HSK Order: In order', 'level'],
    ['HSK Order: Mixed', 'blend']]
@@ -875,8 +875,11 @@ def build_html(levels_tiles, status, version_label, deck_name, field_name,
                  "each word names the signals that apply."
                  % tuple(round(w * 100)
                          for w in (W_FREQ, W_COMP, W_UNLOCK, W_LEVEL)),
-        "freq": "Purely by corpus frequency: the most common words in "
-                "everyday Chinese first, regardless of HSK level.",
+        "freq": "Purely by corpus frequency: the most common words "
+                "first, regardless of HSK level. The corpus blends "
+                "written and spoken Chinese, so formal written words "
+                "rank high too; words sharing a #rank are exactly tied "
+                "in the data.",
         "level": "Strictly increasing HSK level: all of one level before "
                  "any of the next, keeping the selected word order within "
                  "each level.",
