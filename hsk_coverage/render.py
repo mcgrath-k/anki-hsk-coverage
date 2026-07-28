@@ -891,8 +891,7 @@ def build_html(levels_tiles, status, version_label, deck_name, field_name,
     <span class="big" id="sum-pct">%.1f%%</span>
     <span class="sub"><b id="sum-rev">%d</b> of <b>%d</b> %s 1–6 words
       reviewed or marked known · <b id="sum-cov">%d</b>
-      (<span id="sum-covpct">%.1f%%</span>) matched in your deck,
-      reviewed or not</span>
+      (<span id="sum-covpct">%.1f%%</span>) matched in deck</span>
     <button class="planbtn" onclick="togglePlan()">Study plan</button>
   </div>
   <div class="board" id="board">%s</div>
