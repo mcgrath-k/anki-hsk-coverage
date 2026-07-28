@@ -37,9 +37,11 @@ def recommend(levels_tiles, status, freq, limit=100,
     mode "board":  the unknown words exactly as the board presents them —
                    level by level, single characters first, then official
                    list order. No scoring, no reasons.
-    mode "smart":  weighted-score order (best first); with by_level, the
-                   ranking is grouped strictly by ascending HSK level,
-                   best-first within each level.
+    mode "smart":  weighted-score order (best first).
+    mode "freq":   purely by corpus frequency (most common first).
+
+    With by_level, smart/freq rankings are grouped strictly by ascending
+    HSK level, keeping their order within each level.
     """
     max_lvl = max(levels_tiles) if levels_tiles else 1
 
@@ -81,13 +83,10 @@ def recommend(levels_tiles, status, freq, limit=100,
         score = (W_FREQ * freq_n + W_COMP * comp_n
                  + W_UNLOCK * unlock_n + W_LEVEL * level_n)
 
-        reason = []
-        if zipf >= 5:
-            reason.append("very common")
-        elif zipf >= 4:
-            reason.append("common")
-        elif zipf >= 3:
-            reason.append("fairly common")
+        freq_word = ("very common" if zipf >= 5 else
+                     "common" if zipf >= 4 else
+                     "fairly common" if zipf >= 3 else "")
+        reason = [freq_word] if freq_word else []
         if len(chars) == 1:
             if known:
                 reason.append("character appears in words you know")
@@ -104,12 +103,23 @@ def recommend(levels_tiles, status, freq, limit=100,
         items.append({
             "w": word, "lvl": lvl, "score": round(score, 4),
             "zipf": zipf, "reason": " · ".join(reason),
+            "freq_reason": freq_word,
         })
 
-    if by_level:
+    if mode == "freq":
+        # frequency alone decides the order; the note under each word
+        # only states how common it is
+        for it in items:
+            it["reason"] = it["freq_reason"]
+        if by_level:
+            items.sort(key=lambda x: (x["lvl"], -x["zipf"], x["w"]))
+        else:
+            items.sort(key=lambda x: (-x["zipf"], x["w"]))
+    elif by_level:
         items.sort(key=lambda x: (x["lvl"], -x["score"], -x["zipf"], x["w"]))
     else:
         items.sort(key=lambda x: (-x["score"], -x["zipf"], x["w"]))
     for it in items:
         it.pop("zipf", None)
+        it.pop("freq_reason", None)
     return items[:limit], len(unknown)

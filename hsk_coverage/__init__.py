@@ -319,7 +319,7 @@ class HSKCoverageDialog(QDialog):
         self._nav_mode = nm if nm in ("all", "unknown", "covered") else "all"
         self._plan_open = bool(cfg.get("plan_open", False))
         pm = cfg.get("plan_mode", "smart")
-        self._plan_mode = pm if pm in ("smart", "board") else "smart"
+        self._plan_mode = pm if pm in ("smart", "board", "freq") else "smart"
         pl = cfg.get("plan_levels", "blend")
         self._plan_levels = pl if pl in ("blend", "level") else "blend"
         self._intro_seen = bool(cfg.get("intro_seen", False))
@@ -663,7 +663,7 @@ class HSKCoverageDialog(QDialog):
             return None
         if cmd.startswith("hskplan:"):
             kind, _, val = cmd[len("hskplan:"):].partition(":")
-            if kind == "mode" and val in ("smart", "board"):
+            if kind == "mode" and val in ("smart", "board", "freq"):
                 self._plan_mode = val
             elif kind == "levels" and val in ("blend", "level"):
                 self._plan_levels = val

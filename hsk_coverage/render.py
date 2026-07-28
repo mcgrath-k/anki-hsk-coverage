@@ -125,7 +125,7 @@ body.planopen #plan { right:0; }
   border:1px solid var(--border); color:var(--muted); font-weight:700;
   font-size:10.5px; line-height:1; padding:3px 8px; align-self:center; }
 .mchip.ihelp:hover { border-color:#3b82f6; color:#3b82f6; }
-.mgap { margin-left:8px; }
+.mgrp { display:flex; gap:5px; align-items:center; flex-wrap:wrap; }
 #plan-help { display:none; padding:8px 16px 10px 16px; font-size:11px;
   line-height:1.45; color:var(--muted);
   border-bottom:1px solid var(--border); }
@@ -404,22 +404,24 @@ function planRow(it){
 /* plan-selector chips: pick which ordering to follow; hover a chip to
    see how that ordering is built */
 function renderPlanCtl(){
-  var h = 'Word Order: ';
-  [['board', 'Board order'], ['smart', 'Smart order']].forEach(function(p){
-    h += '<span class="mchip' + (PLAN_MODE === p[0] ? ' sel' : '') +
-         '" title="' + esc(PLAN_TIPS[p[0]]) +
-         '" onclick="setPlanOpt(\'mode\',\'' + p[0] + '\')">' +
-         p[1] + '</span>';
-  });
-  if (PLAN_MODE === 'smart'){
-    h += '<span class="mgap">HSK Level Order:</span>';
-    [['level', 'In order'], ['blend', 'Mixed']].forEach(function(p){
-      h += '<span class="mchip' + (PLAN_LEVELS === p[0] ? ' sel' : '') +
+  // each label + its chips is one flex group, so a wrap moves the whole
+  // group to the next line with no stray leading gap
+  function grp(label, kind, cur, opts){
+    var h = '<span class="mgrp">' + label + ' ';
+    opts.forEach(function(p){
+      h += '<span class="mchip' + (cur === p[0] ? ' sel' : '') +
            '" title="' + esc(PLAN_TIPS[p[0]]) +
-           '" onclick="setPlanOpt(\'levels\',\'' + p[0] + '\')">' +
+           '" onclick="setPlanOpt(\'' + kind + '\',\'' + p[0] + '\')">' +
            p[1] + '</span>';
     });
+    return h + '</span>';
   }
+  var h = grp('Word Order:', 'mode', PLAN_MODE,
+              [['board', 'Board order'], ['smart', 'Smart order'],
+               ['freq', 'Frequency']]);
+  if (PLAN_MODE !== 'board')
+    h += grp('HSK Order:', 'levels', PLAN_LEVELS,
+             [['level', 'In order'], ['blend', 'Mixed']]);
   document.getElementById('plan-ctl').innerHTML = h;
 }
 /* the same explanations as the chips' hover tips, spelled out in an
@@ -429,8 +431,9 @@ function togglePlanHelp(){
   if (el.style.display === 'block'){ el.style.display = 'none'; return; }
   var h = '';
   [['Board order', 'board'], ['Smart order', 'smart'],
-   ['HSK Level Order: In order', 'level'],
-   ['HSK Level Order: Mixed', 'blend']]
+   ['Frequency', 'freq'],
+   ['HSK Order: In order', 'level'],
+   ['HSK Order: Mixed', 'blend']]
   .forEach(function(p){
     h += '<div class="phrow"><b>' + p[0] + '</b> — ' +
          esc(PLAN_TIPS[p[1]]) + '</div>';
@@ -869,10 +872,16 @@ def build_html(levels_tiles, status, version_label, deck_name, field_name,
                  "each word names the signals that apply."
                  % tuple(round(w * 100)
                          for w in (W_FREQ, W_COMP, W_UNLOCK, W_LEVEL)),
+        "freq": "Purely by corpus frequency: the most common words in "
+                "everyday Chinese first, regardless of HSK level.",
         "level": "Strictly increasing HSK level: all of one level before "
-                 "any of the next, best score first within each level.",
-        "blend": "Levels mix freely: the best next word wins overall "
-                 "(level still adds a small boost to the score).",
+                 "any of the next, keeping the selected word order within "
+                 "each level.",
+        "blend": "All levels compete at once, ranked purely by the "
+                 "selected word order. In Smart order a lower HSK level "
+                 "still contributes %d%% of the score, nudging "
+                 "early-level words ahead when words are otherwise equal."
+                 % round(W_LEVEL * 100),
     }
 
     js = JS % {"colors": json.dumps(LEVEL_COLORS),
