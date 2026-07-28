@@ -10,5 +10,6 @@
   "plan_open": false,
   "plan_mode": "smart",
   "plan_levels": "blend",
-  "intro_seen": false
+  "intro_seen": false,
+  "plan_width": 332
 }

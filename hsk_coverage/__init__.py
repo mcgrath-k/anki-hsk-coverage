@@ -323,6 +323,11 @@ class HSKCoverageDialog(QDialog):
         pl = cfg.get("plan_levels", "blend")
         self._plan_levels = pl if pl in ("blend", "level") else "blend"
         self._intro_seen = bool(cfg.get("intro_seen", False))
+        try:
+            self._plan_width = max(240, min(640,
+                                            int(cfg.get("plan_width", 332))))
+        except (TypeError, ValueError):
+            self._plan_width = 332
 
         top = QHBoxLayout()
         top.addWidget(QLabel("Deck:"))
@@ -645,6 +650,14 @@ class HSKCoverageDialog(QDialog):
             self._plan_open = cmd[len("hskpane:"):] == "1"
             self.write_config()
             return None
+        if cmd.startswith("hskpanew:"):
+            try:
+                w = int(cmd[len("hskpanew:"):])
+            except ValueError:
+                return None
+            self._plan_width = max(240, min(640, w))
+            self.write_config()
+            return None
         if cmd.startswith("hskplan:"):
             kind, _, val = cmd[len("hskplan:"):].partition(":")
             if kind == "mode" and val in ("smart", "board"):
@@ -833,8 +846,9 @@ class HSKCoverageDialog(QDialog):
             # headline percentage counts reviewed-or-known words only,
             # matching build_html
             "pct": "%.1f%%" % (100.0 * reviewed / total if total else 0.0),
-            "covered": str(covered),
             "reviewed": str(reviewed),
+            "covered": str(covered),
+            "covpct": "%.1f%%" % (100.0 * covered / total if total else 0.0),
         }
         return panels, summary
 
@@ -879,7 +893,8 @@ class HSKCoverageDialog(QDialog):
                           plan_open=self._plan_open,
                           plan_mode=self._plan_mode,
                           plan_levels=self._plan_levels,
-                          show_intro=not self._intro_seen)
+                          show_intro=not self._intro_seen,
+                          plan_width=self._plan_width)
         self.web.setHtml(page)
         self.write_config()
 
@@ -897,6 +912,7 @@ class HSKCoverageDialog(QDialog):
             "plan_mode": self._plan_mode,
             "plan_levels": self._plan_levels,
             "intro_seen": self._intro_seen,
+            "plan_width": self._plan_width,
         })
 
 

@@ -55,9 +55,7 @@ body { margin:0; padding:18px; background:var(--bg); color:var(--text);
 .summary { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap;
   margin:0 2px 14px 2px; }
 .summary .big { font-size:30px; font-weight:700; letter-spacing:-0.5px; }
-.summary .shead { display:flex; flex-direction:column; gap:1px; min-width:0; }
 .summary .sub { color:var(--muted); font-size:13px; }
-.summary .subsub { color:var(--muted); font-size:11px; }
 .brow { display:flex; gap:12px; align-items:flex-start;
   margin-bottom:12px; }
 .panel { background:var(--panel); border:1px solid var(--border);
@@ -104,16 +102,19 @@ body { margin:0; padding:18px; background:var(--bg); color:var(--text);
   color:var(--text); font-size:12px; padding:5px 12px; border-radius:8px;
   cursor:pointer; margin-left:auto; }
 .planbtn:hover { border-color:#3b82f6; color:#3b82f6; }
-body.planopen { padding-right:352px; }
-#plan { position:fixed; top:0; right:-345px; width:332px; height:100%;
+body.planopen { padding-right:calc(var(--planw,332px) + 20px); }
+#plan { position:fixed; top:0; right:calc(-1 * var(--planw,332px) - 13px);
+  width:var(--planw,332px); height:100%;
   background:var(--panel); border-left:1px solid var(--border);
   z-index:40; display:flex; flex-direction:column;
   transition:right .2s ease; }
 body.planopen #plan { right:0; }
+#pgrip { position:absolute; left:0; top:0; width:6px; height:100%;
+  cursor:col-resize; }
+#pgrip:hover { background:var(--border); }
 #plan .phead { display:flex; align-items:baseline; gap:8px;
   padding:14px 16px 10px 16px; border-bottom:1px solid var(--border); }
 #plan .phead b { font-size:14px; }
-#plan .phead .pn { color:var(--muted); font-size:11.5px; margin-left:auto; }
 #plan .pmethod { display:flex; gap:5px; flex-wrap:wrap; align-items:center;
   padding:8px 16px; font-size:10.5px; color:var(--muted);
   border-bottom:1px solid var(--border); }
@@ -451,14 +452,35 @@ function setPlan(d){
   var h = '';
   d.items.forEach(function(it){ h += planRow(it); });
   document.getElementById('plan-list').innerHTML = h;
-  document.getElementById('plan-n').textContent =
-      d.total + ' words not yet known';
 }
 function togglePlan(){
   var open = document.body.classList.toggle('planopen');
   if (window.pycmd) pycmd('hskpane:' + (open ? '1' : '0'));
   setTimeout(layoutBoard, 230);   // after the slide-in settles
 }
+/* drag the pane's left edge to resize it; the board re-lays-out once on
+   release, not on every mousemove */
+var _dragPW = false;
+document.addEventListener('mousedown', function(e){
+  if (e.target.id !== 'pgrip') return;
+  e.preventDefault();
+  _dragPW = true;
+  document.body.style.userSelect = 'none';
+});
+document.addEventListener('mousemove', function(e){
+  if (!_dragPW) return;
+  var w = Math.max(240, Math.min(640, window.innerWidth - e.clientX));
+  document.body.style.setProperty('--planw', w + 'px');
+});
+document.addEventListener('mouseup', function(){
+  if (!_dragPW) return;
+  _dragPW = false;
+  document.body.style.userSelect = '';
+  var w = Math.round(parseFloat(
+      getComputedStyle(document.getElementById('plan')).width));
+  if (window.pycmd) pycmd('hskpanew:' + w);
+  layoutBoard();
+});
 /* words that just became covered fade out of the list (scrolled into
    view first, so mass card-adding is hands-free), then the whole list
    re-ranks once things settle */
@@ -525,8 +547,9 @@ function updateHeaders(d){
   });
   if (d.summary){
     document.getElementById('sum-pct').textContent = d.summary.pct;
-    document.getElementById('sum-cov').textContent = d.summary.covered;
     document.getElementById('sum-rev').textContent = d.summary.reviewed;
+    document.getElementById('sum-cov').textContent = d.summary.covered;
+    document.getElementById('sum-covpct').textContent = d.summary.covpct;
   }
 }
 function applyPatch(raw){
@@ -808,7 +831,8 @@ def _panel_html(lvl, tiles, status, cum_total, collapsed):
 def build_html(levels_tiles, status, version_label, deck_name, field_name,
                night=False, collapsed_levels=(), extra_js="",
                nav_mode="all", known_file="", plan=None, plan_open=False,
-               plan_mode="smart", plan_levels="blend", show_intro=False):
+               plan_mode="smart", plan_levels="blend", show_intro=False,
+               plan_width=332):
     panels = []
     reviewed = indeck = total = 0       # HSK 1-6 only, for the top summary
     cum = 0
@@ -824,8 +848,10 @@ def build_html(levels_tiles, status, version_label, deck_name, field_name,
     panels = "".join(panels)
     covered = reviewed + indeck
     # the headline percentage is words actually reviewed (or marked
-    # known), not merely added to the deck
+    # known); the matched count alongside includes unreviewed cards
     pct = 100.0 * reviewed / total if total else 0.0
+    covpct = 100.0 * covered / total if total else 0.0
+    plan_width = max(240, min(640, int(plan_width or 332)))
 
     # hover explanations for the plan-selector chips (weights come from
     # plan.py so they never drift; keep the text free of double quotes —
@@ -860,20 +886,19 @@ def build_html(levels_tiles, status, version_label, deck_name, field_name,
 
     return """<!doctype html><html><head><meta charset="utf-8">
 <style>%s</style></head>
-<body class="%s">
+<body class="%s" style="--planw:%dpx">
   <div class="summary">
     <span class="big" id="sum-pct">%.1f%%</span>
-    <div class="shead">
-      <div class="sub"><b id="sum-cov">%d</b> of <b>%d</b> %s 1–6 words
-        in <b>%s</b> · matching field “%s”</div>
-      <div class="subsub"><span id="sum-rev">%d</span> reviewed or known</div>
-    </div>
+    <span class="sub"><b id="sum-rev">%d</b> of <b>%d</b> %s 1–6 words
+      reviewed or marked known · <b id="sum-cov">%d</b>
+      (<span id="sum-covpct">%.1f%%</span>) matched in your deck,
+      reviewed or not</span>
     <button class="planbtn" onclick="togglePlan()">Study plan</button>
   </div>
   <div class="board" id="board">%s</div>
   <div id="plan">
-    <div class="phead"><b>Study plan</b>
-      <span class="pn" id="plan-n"></span></div>
+    <div id="pgrip" title="drag to resize"></div>
+    <div class="phead"><b>Study plan</b></div>
     <div class="pmethod" id="plan-ctl"></div>
     <div id="plan-help"></div>
     <div id="plan-list"></div>
@@ -902,8 +927,9 @@ def build_html(levels_tiles, status, version_label, deck_name, field_name,
         CSS,
         " ".join(filter(None, ["night" if night else "",
                                "planopen" if plan_open else ""])),
-        pct, covered, total,
-        html_mod.escape(version_label), html_mod.escape(deck_name),
-        html_mod.escape(field_name), reviewed,
+        plan_width,
+        pct, reviewed, total,
+        html_mod.escape(version_label),
+        covered, covpct,
         panels, js, extra_js,
     )
