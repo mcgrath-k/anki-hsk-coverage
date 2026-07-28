@@ -1,3 +1,6 @@
 __pycache__/
 claude_info/
 *.ankiaddon
+hsk_coverage/user_files/
+hsk_coverage/meta.json
+.DS_Store
