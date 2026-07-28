@@ -26,6 +26,7 @@ def wanted(rel, name):
         return False
     if rel.split(os.sep)[0] == "data":
         return fnmatch.fnmatch(name, "*_words_level*.txt") \
+            or name == "word_freq.json" \
             or name.lower() == "readme.md"
     return True
 

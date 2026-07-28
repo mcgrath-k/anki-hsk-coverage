@@ -5,3 +5,5 @@ Vizualize which of the official HSK 1-9 words are in your Anki deck. Supports HS
 HSK vocabulary lists are collected from Rebecca J. Stone's MteH: https://github.com/becky82/mteh/tree/main
 
 Dictionary data (pinyin, meanings, traditional forms) is CC-CEDICT (CC BY-SA 4.0), downloaded once from MDBG on first run: https://www.mdbg.net/chinese/dictionary?page=cc-cedict
+
+Word-frequency data for the study-plan ranking is derived from the wordfreq dataset (CC BY-SA 4.0): https://github.com/rspeer/wordfreq

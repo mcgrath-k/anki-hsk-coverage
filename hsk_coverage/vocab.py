@@ -22,10 +22,12 @@ Entry syntax found in the lists:
 """
 
 import gzip
+import json
 import os
 import re
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+FREQ_PATH = os.path.join(DATA_DIR, "word_freq.json")
 CEDICT_URL = ("https://www.mdbg.net/chinese/export/cedict/"
               "cedict_1_0_ts_utf-8_mdbg.txt.gz")
 CEDICT_PATH = os.path.join(
@@ -193,6 +195,16 @@ class Vocab:
         self._load_lists(data_dir)
         self._load_dictionary(cedict_path)
         self._finish_tiles()
+        self._load_freq()
+
+    def _load_freq(self):
+        """word -> Zipf frequency, from the shipped wordfreq-derived table
+        (used by plan.py to rank study recommendations)."""
+        try:
+            with open(FREQ_PATH, encoding="utf-8") as f:
+                self.freq = json.load(f)
+        except (OSError, ValueError):
+            self.freq = {}
 
     # -- word lists (txt files)
 
@@ -279,6 +291,27 @@ class Vocab:
                     bases.append(
                         {"word": m.group(1), "forms": base["forms"]})
         return bases
+
+    _XREF_RE = re.compile(
+        r"^(?:(?:old |archaic )?variant of |see (?:also )?|used in |CL:"
+        r"|surname )")
+
+    def best_gloss(self, info):
+        """(pinyin, meaning) for a one-line summary (study plan). CC-CEDICT
+        often lists cross-references ("variant of 著[zhao1]") or minor
+        senses ("surname Cong") first, so pick the reading with the most
+        substantive meanings and take its first one."""
+        if not info or not info["forms"]:
+            return "", ""
+        best = None   # (meaning count, pinyin, first meaning)
+        for form in info["forms"]:
+            good = [m for m in form["m"] if not self._XREF_RE.search(m)]
+            if good and (best is None or len(good) > best[0]):
+                best = (len(good), form["p"], good[0])
+        if best:
+            return best[1], best[2]
+        form = info["forms"][0]
+        return form["p"], form["m"][0] if form["m"] else ""
 
     def dict_info(self, display, aliases=()):
         """Dictionary entry for a tile, trying sensible fallbacks."""
