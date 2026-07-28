@@ -122,7 +122,8 @@ body.planopen #plan { right:0; }
   font-weight:600; cursor:pointer; }
 .mchip.sel { background:#3b82f6; color:#fff; }
 .mchip.ihelp { margin-left:auto; background:transparent;
-  border:1px solid var(--border); color:var(--muted); font-weight:700; }
+  border:1px solid var(--border); color:var(--muted); font-weight:700;
+  font-size:10.5px; line-height:1; padding:3px 8px; align-self:center; }
 .mchip.ihelp:hover { border-color:#3b82f6; color:#3b82f6; }
 .mgap { margin-left:8px; }
 #plan-help { display:none; padding:8px 16px 10px 16px; font-size:11px;
@@ -403,7 +404,7 @@ function planRow(it){
 /* plan-selector chips: pick which ordering to follow; hover a chip to
    see how that ordering is built */
 function renderPlanCtl(){
-  var h = 'Plan: ';
+  var h = 'Word Order: ';
   [['board', 'Board order'], ['smart', 'Smart order']].forEach(function(p){
     h += '<span class="mchip' + (PLAN_MODE === p[0] ? ' sel' : '') +
          '" title="' + esc(PLAN_TIPS[p[0]]) +
@@ -411,7 +412,7 @@ function renderPlanCtl(){
          p[1] + '</span>';
   });
   if (PLAN_MODE === 'smart'){
-    h += '<span class="mgap">Levels:</span>';
+    h += '<span class="mgap">HSK Level Order:</span>';
     [['level', 'In order'], ['blend', 'Mixed']].forEach(function(p){
       h += '<span class="mchip' + (PLAN_LEVELS === p[0] ? ' sel' : '') +
            '" title="' + esc(PLAN_TIPS[p[0]]) +
@@ -419,8 +420,6 @@ function renderPlanCtl(){
            p[1] + '</span>';
     });
   }
-  h += '<span class="mchip ihelp" onclick="togglePlanHelp()" ' +
-       'title="what do these settings mean?">i</span>';
   document.getElementById('plan-ctl').innerHTML = h;
 }
 /* the same explanations as the chips' hover tips, spelled out in an
@@ -430,7 +429,8 @@ function togglePlanHelp(){
   if (el.style.display === 'block'){ el.style.display = 'none'; return; }
   var h = '';
   [['Board order', 'board'], ['Smart order', 'smart'],
-   ['Levels: In order', 'level'], ['Levels: Mixed', 'blend']]
+   ['HSK Level Order: In order', 'level'],
+   ['HSK Level Order: Mixed', 'blend']]
   .forEach(function(p){
     h += '<div class="phrow"><b>' + p[0] + '</b> — ' +
          esc(PLAN_TIPS[p[1]]) + '</div>';
@@ -897,7 +897,9 @@ def build_html(levels_tiles, status, version_label, deck_name, field_name,
   <div class="board" id="board">%s</div>
   <div id="plan">
     <div id="pgrip" title="drag to resize"></div>
-    <div class="phead"><b>Study plan</b></div>
+    <div class="phead"><b>Study plan</b>
+      <span class="mchip ihelp" onclick="togglePlanHelp()"
+        title="what do these settings mean?">i</span></div>
     <div class="pmethod" id="plan-ctl"></div>
     <div id="plan-help"></div>
     <div id="plan-list"></div>
