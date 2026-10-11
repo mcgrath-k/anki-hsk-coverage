@@ -1,0 +1,10 @@
+name: Question
+description: Ask how something works, or about the word lists and data sources
+labels: [question]
+body:
+  - type: textarea
+    id: q
+    attributes:
+      label: Your question
+    validations:
+      required: true

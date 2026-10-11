@@ -41,6 +41,7 @@ from .plan import recommend, FREQ_MODES
 
 PLAN_MODES = ("board",) + FREQ_MODES
 
+ISSUES_URL = "https://github.com/mcgrath-k/anki-hsk-coverage/issues/new/choose"
 KNOWN_PATH = os.path.join(
     os.path.dirname(__file__), "user_files", "known_words.json")
 USER_FILES = os.path.dirname(KNOWN_PATH)
@@ -1040,6 +1041,9 @@ class HSKCoverageDialog(QDialog):
                 self.create_known_file()
             elif action == "debug":
                 self._reveal(DEBUG_LOG)
+            elif action == "issue":
+                from aqt.utils import openLink
+                openLink(ISSUES_URL)
             elif action in ("copy", "save"):
                 self.export_json(save=action == "save")
             return None

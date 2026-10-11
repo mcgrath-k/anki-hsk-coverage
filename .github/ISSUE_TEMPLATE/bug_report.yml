@@ -1,0 +1,64 @@
+name: Bug report
+description: Something in the HSK Coverage Map is broken, frozen, or wrong
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The more of this you can fill in, the faster it gets fixed.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+      placeholder: |
+        1. Opened Tools ▸ HSK Coverage Map
+        2. Clicked …
+        3. Expected … but …
+    validations:
+      required: true
+  - type: input
+    id: anki
+    attributes:
+      label: Anki version
+      description: From Help ▸ About in Anki (e.g. "25.09.4 Qt6").
+      placeholder: 25.09.4
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Windows
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: addon
+    attributes:
+      label: Add-on version
+      description: From Tools ▸ Add-ons (select the add-on; the version shows under its name), or the "human_version" in manifest.json.
+  - type: dropdown
+    id: list
+    attributes:
+      label: Word list in use
+      options:
+        - HSK 2.0 (2012)
+        - HSK 3.0 (2021)
+        - HSK 3.0 (2025)
+        - Not relevant
+  - type: textarea
+    id: log
+    attributes:
+      label: Debug log
+      description: |
+        In the map, click **Options ▸ Show debug log in folder** and attach `debug.log` here (drag the file in), or paste its last ~50 lines.
+        It records page errors and, if Anki froze, a stack dump of what it was doing. It contains your deck and field names but no card contents.
+      render: text
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots, other add-ons that might interact, whether it worked in an earlier version.

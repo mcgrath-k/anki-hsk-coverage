@@ -775,7 +775,8 @@ function showOptions(){
        '</div>';
   h += '<div class="sec">Debugging</div>';
   h += '<div class="btns"><button onclick="opt(\'debug\')">' +
-       'Show debug log in folder</button></div>';
+       'Show debug log in folder</button>' +
+       '<button onclick="opt(\'issue\')">Report a problem…</button></div>';
   h += '<div class="sec">Help</div>';
   h += '<div class="btns"><button onclick="hideOptions();showIntro(0)">' +
        'Show the intro tour</button></div>';

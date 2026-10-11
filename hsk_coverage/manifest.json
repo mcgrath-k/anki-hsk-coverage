@@ -1,5 +1,8 @@
 {
   "package": "hsk_coverage",
   "name": "HSK Coverage Map",
+  "human_version": "1.0.0",
+  "min_point_version": 50,
+  "homepage": "https://github.com/mcgrath-k/anki-hsk-coverage",
   "conflicts": []
 }
