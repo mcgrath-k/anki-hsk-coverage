@@ -49,9 +49,16 @@ body.night {
   --muted:#a8a29e; --tile:#2c2c2c; --tiletext:#9c9894; --overlay:#000000a8;
 }
 * { box-sizing:border-box; }
-body { margin:0; padding:18px; background:var(--bg); color:var(--text);
+html, body { height:100%; overflow:hidden; }
+body { margin:0; background:var(--bg); color:var(--text);
   font-family:-apple-system,"Segoe UI","Helvetica Neue","PingFang SC",
   "Hiragino Sans GB","Microsoft YaHei",sans-serif; }
+/* the map scrolls in its own box that ends where the study-plan pane
+   begins, so its scrollbar sits at the map's right edge, not the
+   window's (behind the pane) */
+#main { position:fixed; top:0; left:0; bottom:0; right:0;
+  overflow-y:auto; padding:18px; transition:right .2s ease; }
+body.planopen #main { right:var(--planw,332px); }
 .summary { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap;
   margin:0 2px 14px 2px; }
 .summary .big { font-size:30px; font-weight:700; letter-spacing:-0.5px; }
@@ -107,7 +114,6 @@ body { margin:0; padding:18px; background:var(--bg); color:var(--text);
   background:var(--panel); border-left:1px solid var(--border);
   z-index:40; display:flex; flex-direction:column;
   transition:right .2s ease; }
-body.planopen { padding-right:calc(var(--planw,332px) + 20px); }
 body.planopen #plan { right:0; }
 #pgrip { position:absolute; left:0; top:0; width:6px; height:100%;
   cursor:col-resize; }
@@ -287,7 +293,8 @@ function togglePanel(p){
   p.classList.toggle('collapsed');
   if (window.pycmd) pycmd('hsktoggle:' + p.dataset.lvl);
   layoutBoard();
-  window.scrollBy(0, p.getBoundingClientRect().top - before);
+  document.getElementById('main').scrollBy(
+    0, p.getBoundingClientRect().top - before);
 }
 
 /* ---- justified layout ----
@@ -323,7 +330,8 @@ function layoutBoard(){
   if (!_panels) measurePanels();
   // emptying the board momentarily shrinks the page, which would clamp
   // the scroll position to the top — save it and restore afterwards
-  var scrollY = window.scrollY;
+  var main = document.getElementById('main');
+  var scrollY = main.scrollTop;
   var W = board.clientWidth || document.body.clientWidth - 36;
   var rows = [], cur = [];
   function flush(){ if (cur.length){ rows.push(cur); cur = []; } }
@@ -358,7 +366,7 @@ function layoutBoard(){
     board.appendChild(d);
     equalizeRow(r, avail);
   });
-  window.scrollTo(0, scrollY);
+  main.scrollTop = scrollY;
   _lastW = W;
   if (window.pycmd)
     pycmd('hsklog:layout W=' + W + ' doc=' +
@@ -950,6 +958,7 @@ def build_html(levels_tiles, status, version_label, deck_name, field_name,
     return """<!doctype html><html><head><meta charset="utf-8">
 <style>%s</style></head>
 <body class="%s" style="--planw:%dpx">
+  <div id="main">
   <div class="summary">
     <span class="big" id="sum-pct">%.1f%%</span>
     <span class="sub"><b id="sum-rev">%d</b> of <b>%d</b> %s 1–6 words
@@ -958,15 +967,6 @@ def build_html(levels_tiles, status, version_label, deck_name, field_name,
     <button class="planbtn" onclick="togglePlan()">Study plan</button>
   </div>
   <div class="board" id="board">%s</div>
-  <div id="plan">
-    <div id="pgrip" title="drag to resize"></div>
-    <div class="phead"><b>Study plan</b>
-      <span class="mchip ihelp" onclick="togglePlanHelp()"
-        title="what do these settings mean?">i</span></div>
-    <div class="pmethod" id="plan-ctl"></div>
-    <div id="plan-help"></div>
-    <div id="plan-list"></div>
-  </div>
   <div class="legend">
     <span><span class="t st-r" style="background:#94a3b8;color:#fff">爱</span>
       reviewed, or marked known</span>
@@ -978,6 +978,16 @@ def build_html(levels_tiles, status, version_label, deck_name, field_name,
     <span class="hint" title="Within each panel: single-character words
       first, then multi-character words — each group in official HSK
       list order.">tile order</span>
+  </div>
+  </div>
+  <div id="plan">
+    <div id="pgrip" title="drag to resize"></div>
+    <div class="phead"><b>Study plan</b>
+      <span class="mchip ihelp" onclick="togglePlanHelp()"
+        title="what do these settings mean?">i</span></div>
+    <div class="pmethod" id="plan-ctl"></div>
+    <div id="plan-help"></div>
+    <div id="plan-list"></div>
   </div>
   <div id="ov">
     <button class="nav" onclick="navInfo(-1)" title="previous word">‹</button>
