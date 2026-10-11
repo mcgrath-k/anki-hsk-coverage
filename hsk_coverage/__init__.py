@@ -24,8 +24,9 @@ from collections import defaultdict
 from aqt import mw
 from aqt.qt import (
     QDialog, QVBoxLayout, QHBoxLayout, QComboBox, QCheckBox, QLabel,
-    QPushButton, QLineEdit, QFrame, QToolButton, QShortcut, QKeySequence,
-    QFileDialog, QFontMetrics, QTimer, QEvent, Qt, qconnect,
+    QPushButton, QLineEdit, QFrame, QToolButton, QWidget, QSizePolicy,
+    QSpacerItem, QShortcut, QKeySequence, QFileDialog, QFontMetrics, QTimer, QEvent, Qt,
+    qconnect,
 )
 from aqt.webview import AnkiWebView
 from aqt.theme import theme_manager
@@ -456,6 +457,8 @@ class HSKCoverageDialog(QDialog):
             self.ver_box.setCurrentIndex(idx)
         top.addWidget(self.ver_box)
 
+        # the checkbox and the two buttons drop to a second toolbar row
+        # one at a time when the window gets too narrow (see _restack_top)
         top.addSpacing(10)
         self.chk_known = QCheckBox("Include words marked known")
         self.chk_known.setChecked(bool(cfg.get("show_known", True)))
@@ -464,17 +467,34 @@ class HSKCoverageDialog(QDialog):
             "know without an Anki card. Uncheck to see only real deck "
             "coverage.")
         top.addWidget(self.chk_known)
+        self._top1_stretch = QSpacerItem(0, 0, QSizePolicy.Policy.Expanding,
+                                         QSizePolicy.Policy.Minimum)
+        top.addItem(self._top1_stretch)
 
-        top.addStretch()
+        self._btns = QWidget()
+        self._btns.setSizePolicy(QSizePolicy.Policy.Fixed,
+                                 QSizePolicy.Policy.Fixed)
+        btns = QHBoxLayout(self._btns)
+        btns.setContentsMargins(0, 0, 0, 0)
         refresh = QPushButton("Rescan deck")
         qconnect(refresh.clicked, self.rescan)
-        top.addWidget(refresh)
-
+        btns.addWidget(refresh)
         self._gear = QPushButton("Options")
         self._gear.setToolTip(
             "Arrow-key cycling, known-words database & debug files")
         qconnect(self._gear.clicked, self.open_options)
-        top.addWidget(self._gear)
+        btns.addWidget(self._gear)
+        top.addWidget(self._btns)
+
+        self._top1 = top
+        self._row2 = QWidget()
+        self._row2.setSizePolicy(QSizePolicy.Policy.Preferred,
+                                 QSizePolicy.Policy.Fixed)
+        self._top2 = QHBoxLayout(self._row2)
+        self._top2.setContentsMargins(0, 0, 0, 0)
+        self._top2.addStretch()
+        self._row2.hide()
+        self._stack = 0
 
         self.web = AnkiWebView(self)
         self.web.set_bridge_command(self.on_bridge, self)
@@ -497,7 +517,14 @@ class HSKCoverageDialog(QDialog):
 
         layout = QVBoxLayout(self)
         layout.addLayout(top)
-        layout.addWidget(self.web)
+        layout.addWidget(self._row2)
+        layout.addWidget(self.web, 1)   # the map takes all spare height
+        # let the window shrink to what the fully stacked toolbar needs;
+        # without an explicit minimum the one-row layout dictates the floor
+        self._place_tools(2)
+        layout.activate()
+        self.setMinimumWidth(layout.minimumSize().width())
+        self._place_tools(0)
 
         self._known_file = cfg.get("known_file") or ""
         self._preferred_field = cfg.get("field", "")
@@ -550,8 +577,47 @@ class HSKCoverageDialog(QDialog):
     def resizeEvent(self, evt):
         self._log_geometry("dialog", self, evt)
         super().resizeEvent(evt)
+        if self.layout() is None:        # the resize() in __init__
+            return
+        self._restack_top()
         if self.find_bar.isVisible():
             self.find_bar.place()
+
+    def _restack_top(self):
+        """Stack the toolbar in stages as the window narrows: first the
+        checkbox drops to a second row (the buttons stay top right), then
+        the buttons follow. The one-row width is rebuilt from the current
+        row plus whatever has been moved down, so it stays accurate."""
+        m = self.layout().contentsMargins()
+        avail = self.width() - m.left() - m.right()
+        sp = self._top1.spacing()
+        w_chk = self.chk_known.sizeHint().width() + sp
+        w_btn = self._btns.sizeHint().width() + sp
+        full = self._top1.sizeHint().width() + (
+            w_chk + w_btn if self._stack == 2 else
+            w_chk if self._stack == 1 else 0)
+        level = 0 if avail >= full else 1 if avail >= full - w_chk else 2
+        if level != self._stack:
+            self._place_tools(level)
+
+    def _place_tools(self, level):
+        for w, down in ((self.chk_known, level >= 1),
+                        (self._btns, level >= 2)):
+            if down:
+                self._top1.removeWidget(w)
+                if w is self.chk_known:
+                    self._top2.insertWidget(0, w)
+                else:
+                    self._top2.addWidget(w)
+            else:
+                self._top2.removeWidget(w)
+                if w is self.chk_known:   # back in front of the stretch
+                    self._top1.insertWidget(
+                        self._top1.indexOf(self._top1_stretch), w)
+                else:
+                    self._top1.addWidget(w)
+        self._row2.setVisible(level >= 1)
+        self._stack = level
 
     def closeEvent(self, evt):
         try:
