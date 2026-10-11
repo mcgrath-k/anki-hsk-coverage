@@ -23,15 +23,32 @@ Entry syntax found in the lists:
 
 import gzip
 import json
+import math
 import os
 import re
+import zipfile
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
-FREQ_PATH = os.path.join(DATA_DIR, "word_freq.json")
+USER_FILES = os.path.join(os.path.dirname(__file__), "user_files")
 CEDICT_URL = ("https://www.mdbg.net/chinese/export/cedict/"
               "cedict_1_0_ts_utf-8_mdbg.txt.gz")
-CEDICT_PATH = os.path.join(
-    os.path.dirname(__file__), "user_files", "cedict.txt.gz")
+CEDICT_PATH = os.path.join(USER_FILES, "cedict.txt.gz")
+# SUBTLEX-CH word frequencies (Cai & Brysbaert 2010, PLoS ONE; film/TV
+# subtitles, 33.5 M words) — the word-frequency file, not the character one
+SUBTLEX_URL = ("https://www.ugent.be/pp/experimentele-psychologie/en/"
+               "research/documents/subtlexch/subtlexchwf.zip")
+SUBTLEX_PATH = os.path.join(USER_FILES, "subtlex-ch-wf.zip")
+# BCC corpus (BLCU; Xun et al. 2016) literature channel, by word
+BCC_URL = ("https://bcc.blcu.edu.cn/api/datasets/"
+           "literature_word_freq.txt/download")
+BCC_PATH = os.path.join(USER_FILES, "bcc-literature-word-freq.zip")
+# one-time downloads on first launch: (label, url, path)
+DOWNLOADS = [
+    ("CC-CEDICT dictionary (~4 MB)", CEDICT_URL, CEDICT_PATH),
+    ("SUBTLEX-CH subtitle word frequencies (~4 MB)", SUBTLEX_URL,
+     SUBTLEX_PATH),
+    ("BCC literature word frequencies (~1 MB)", BCC_URL, BCC_PATH),
+]
 
 # (key, label, data folder, level-file suffixes)
 VERSIONS = [
@@ -94,8 +111,10 @@ def parse_entry(raw):
 
 # ---------------------------------------------------------------- CC-CEDICT
 
-def download_cedict(path=CEDICT_PATH, url=CEDICT_URL, timeout=60):
-    """Fetch the CC-CEDICT export from MDBG (about 4 MB, one time)."""
+def download(url, path, timeout=60, progress=None, cancelled=None):
+    """Fetch url to path atomically (via a .part file). progress(done,
+    total_or_None) is called after every chunk; cancelled() returning
+    True aborts the transfer, in which case False is returned."""
     import urllib.request
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".part"
@@ -103,12 +122,67 @@ def download_cedict(path=CEDICT_PATH, url=CEDICT_URL, timeout=60):
         url, headers={"User-Agent": "anki-hsk-coverage-addon"})
     with urllib.request.urlopen(req, timeout=timeout) as resp, \
             open(tmp, "wb") as f:
+        total = resp.headers.get("Content-Length")
+        total = int(total) if total and total.isdigit() else None
+        done = 0
         while True:
+            if cancelled and cancelled():
+                f.close()
+                os.remove(tmp)
+                return False
             chunk = resp.read(1 << 16)
             if not chunk:
                 break
             f.write(chunk)
+            done += len(chunk)
+            if progress:
+                progress(done, total)
     os.replace(tmp, path)
+    return True
+
+
+def _zipf(per_million):
+    """Zipf scale (log10 of frequency per billion words): 6 ≈ one word in
+    a thousand, 3 ≈ one in a million."""
+    return round(math.log10(per_million) + 3, 4)
+
+
+def parse_subtlex(path, keep):
+    """word -> Zipf from the SUBTLEX-CH-WF zip (GBK text: Word, WCount,
+    W/million, ...), restricted to the words in keep."""
+    with zipfile.ZipFile(path) as z:
+        name = [n for n in z.namelist() if n.endswith("SUBTLEX-CH-WF")][0]
+        text = z.read(name).decode("gbk", errors="replace")
+    out = {}
+    for line in text.splitlines():
+        p = line.split("\t")
+        if len(p) >= 3 and p[0] in keep:
+            try:
+                out[p[0]] = _zipf(float(p[2]))
+            except ValueError:
+                pass
+    return out
+
+
+def parse_bcc(path, keep):
+    """word -> Zipf from a BCC download-center word list (zip holding a
+    'token,count' CSV), restricted to the words in keep. Per-million
+    rates come from the file's own token total."""
+    with zipfile.ZipFile(path) as z:
+        text = z.read(z.namelist()[0]).decode("utf-8", errors="replace")
+    counts, total = {}, 0
+    for line in text.splitlines():
+        w, _, c = line.rpartition(",")
+        try:
+            c = int(c)
+        except ValueError:
+            continue
+        total += c
+        if w in keep:
+            counts[w] = c
+    if not total:
+        return {}
+    return {w: _zipf(c / total * 1e6) for w, c in counts.items()}
 
 
 _TONE_MARKS = {
@@ -198,13 +272,20 @@ class Vocab:
         self._load_freq()
 
     def _load_freq(self):
-        """word -> Zipf frequency, from the shipped wordfreq-derived table
-        (used by plan.py to rank study recommendations)."""
+        """Word -> Zipf frequency tables used by plan.py to order the study
+        plan: freq_sub (film/TV subtitles, SUBTLEX-CH) and freq_book
+        (novels and other literature, BCC), from the files fetched on
+        first launch — empty if a download hasn't succeeded yet."""
+        keep = self._needed | {w.replace("…", "") for w in self._needed}
+        self.freq_sub = self._load_corpus(SUBTLEX_PATH, parse_subtlex, keep)
+        self.freq_book = self._load_corpus(BCC_PATH, parse_bcc, keep)
+
+    @staticmethod
+    def _load_corpus(path, parser, keep):
         try:
-            with open(FREQ_PATH, encoding="utf-8") as f:
-                self.freq = json.load(f)
-        except (OSError, ValueError):
-            self.freq = {}
+            return parser(path, keep)
+        except (OSError, ValueError, IndexError, zipfile.BadZipFile):
+            return {}
 
     # -- word lists (txt files)
 

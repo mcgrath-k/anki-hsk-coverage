@@ -19,11 +19,6 @@ full-width header bars.
 import json
 import html as html_mod
 
-try:
-    from .plan import W_FREQ, W_COMP, W_UNLOCK, W_LEVEL
-except ImportError:          # browser-preview scripts import render flat
-    from plan import W_FREQ, W_COMP, W_UNLOCK, W_LEVEL
-
 LEVEL_COLORS = {
     1: "#34d399",  # green
     2: "#38bdf8",  # sky
@@ -121,7 +116,7 @@ body.planopen #plan { right:0; }
 #plan .phead { display:flex; align-items:baseline; gap:8px;
   padding:14px 16px 10px 16px; border-bottom:1px solid var(--border); }
 #plan .phead b { font-size:14px; }
-#plan .pmethod { display:flex; gap:5px; flex-wrap:wrap; align-items:center;
+#plan .pmethod { display:flex; flex-direction:column; gap:6px;
   padding:8px 16px; font-size:10.5px; color:var(--muted);
   border-bottom:1px solid var(--border); }
 .mchip { background:var(--tile); border-radius:99px; padding:2px 8px;
@@ -153,6 +148,11 @@ body.planopen #plan { right:0; }
   display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
 .prow .preason { color:var(--muted); font-size:10.5px; margin-top:2px;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pnote { font-size:12px; line-height:1.45; color:var(--muted);
+  padding:8px 6px 10px 6px; }
+.pnote button { margin-top:8px; border:1px solid var(--border);
+  background:var(--tile); color:var(--text); font-size:12px;
+  padding:5px 10px; border-radius:8px; cursor:pointer; }
 
 /* info & options modals (shared card styling).
    Toggled with opacity/visibility on a promoted layer, NOT display: a
@@ -234,7 +234,7 @@ var VER_LABELS = {"old":"HSK 2.0","new":"HSK 3.0 (2021)","newest":"HSK 3.0 (2025
 var NAV_MODE = %(nav_mode)s;      // 'all' | 'unknown' | 'covered'
 var KNOWN_PATH = %(known_path)s;  // shown in the options popup
 var INITIAL_PLAN = %(plan)s;      // study-plan items rendered on load
-var PLAN_MODE = %(plan_mode)s;    // 'smart' | 'board'
+var PLAN_MODE = %(plan_mode)s;    // 'board' | 'book' | 'sub'
 var PLAN_LEVELS = %(plan_levels)s;// 'blend' | 'level'
 var PLAN_TIPS = %(plan_tips)s;    // hover explanations for the chips
 var SHOW_INTRO = %(show_intro)s;  // first ever start: show the tour
@@ -440,9 +440,11 @@ function renderPlanCtl(){
     });
     return h + '</span>';
   }
+  // the HSK-order row only applies to a frequency order: the board
+  // order is per level by nature
   var h = grp('Word Order:', 'mode', PLAN_MODE,
-              [['board', 'Alphabetical'], ['smart', 'Smart'],
-               ['freq', 'Frequency']]);
+              [['board', 'Alphabetical'], ['book', 'Book Frequency'],
+               ['sub', 'Subtitle Frequency']]);
   if (PLAN_MODE !== 'board')
     h += grp('HSK Order:', 'levels', PLAN_LEVELS,
              [['level', 'In order'], ['blend', 'Mixed']]);
@@ -454,10 +456,9 @@ function togglePlanHelp(){
   var el = document.getElementById('plan-help');
   if (el.style.display === 'block'){ el.style.display = 'none'; return; }
   var h = '';
-  [['Alphabetical', 'board'], ['Smart', 'smart'],
-   ['Frequency', 'freq'],
-   ['HSK Order: In order', 'level'],
-   ['HSK Order: Mixed', 'blend']]
+  [['Alphabetical', 'board'], ['Book Frequency', 'book'],
+   ['Subtitle Frequency', 'sub'],
+   ['HSK Order: In order', 'level'], ['HSK Order: Mixed', 'blend']]
   .forEach(function(p){
     h += '<div class="phrow"><b>' + p[0] + '</b> — ' +
          esc(PLAN_TIPS[p[1]]) + '</div>';
@@ -477,8 +478,19 @@ function setPlanOpt(kind, val){
 function setPlan(d){
   if (!d) return;
   var h = '';
+  if (d.missing)
+    h = '<div class="pnote">The ' + d.missing + ' frequency list has not ' +
+        'been downloaded yet (the one-time download failed or was ' +
+        'cancelled).<br><button onclick="retryDownloads()">Download now' +
+        '</button></div>';
   d.items.forEach(function(it){ h += planRow(it); });
   document.getElementById('plan-list').innerHTML = h;
+}
+function retryDownloads(){
+  if (window.pycmd)
+    pycmd('hskdownload', function(raw){
+      setPlan(typeof raw === 'string' ? JSON.parse(raw) : raw);
+    });
 }
 function togglePlan(){
   var open = document.body.classList.toggle('planopen');
@@ -802,10 +814,10 @@ var INTRO = [
       'fills in and counts, no Anki card needed.'},
   {t: 'Follow a study plan',
    b: 'The <b>Study plan</b> button lists every word you don\'t know ' +
-      'yet, in a suggested order: the board order, or a smart ranking ' +
-      'that blends word frequency, characters you already know, and ' +
-      'what each word unlocks. Add cards in Anki with the map open and ' +
-      'rows tick themselves off the list.'},
+      'yet, in a suggested order: the board order, or most common ' +
+      'first by how often words appear in books or in film and TV ' +
+      'subtitles. Add cards in Anki with the map open and rows tick ' +
+      'themselves off the list.'},
   {t: 'Offline, and yours',
    b: 'After a one-time dictionary download everything works offline. ' +
       'The <b>Options</b> button sets what the arrow keys cycle ' +
@@ -898,7 +910,7 @@ def _panel_html(lvl, tiles, status, cum_total, collapsed):
 def build_html(levels_tiles, status, version_label, deck_name, field_name,
                night=False, collapsed_levels=(), extra_js="",
                nav_mode="all", known_file="", plan=None, plan_open=False,
-               plan_mode="smart", plan_levels="level", show_intro=False,
+               plan_mode="book", plan_levels="level", show_intro=False,
                plan_width=332):
     panels = []
     reviewed = indeck = total = 0       # HSK 1-6 only, for the top summary
@@ -920,35 +932,34 @@ def build_html(levels_tiles, status, version_label, deck_name, field_name,
     covpct = 100.0 * covered / total if total else 0.0
     plan_width = max(240, min(640, int(plan_width or 332)))
 
-    # hover explanations for the plan-selector chips (weights come from
-    # plan.py so they never drift; keep the text free of double quotes —
-    # it lands in a title attribute)
+    # hover explanations for the plan-selector chips (keep the text free
+    # of double quotes — it lands in a title attribute)
     plan_tips = {
         "board": "The same order as the gray tiles on the board: level by "
                  "level, single-character words first, then the official "
                  "HSK list order.",
-        "smart": "Weighted blend of four signals: frequency %d%% (how "
-                 "common the word is in everyday Chinese, from corpus "
-                 "data), known parts %d%% (how many of its characters you "
-                 "already know), unlocks %d%% (how many other unknown HSK "
-                 "words share its characters), level %d%% (earlier levels "
-                 "get a boost). Best score first; the gray note under "
-                 "each word names the signals that apply."
-                 % tuple(round(w * 100)
-                         for w in (W_FREQ, W_COMP, W_UNLOCK, W_LEVEL)),
-        "freq": "Purely by corpus frequency: the most common words "
-                "first, regardless of HSK level. The corpus blends "
-                "written and spoken Chinese, so formal written words "
-                "rank high too; words sharing a #rank are exactly tied "
-                "in the data.",
+        "sub": "Most common first, by how often the word is spoken in "
+               "film and TV subtitles; the gray note gives its rank "
+               "among HSK words (words sharing a rank are exactly tied "
+               "in the data). Source: SUBTLEX-CH "
+               "(Cai & Brysbaert 2010, PLoS ONE 5(6): e10729), 33.5 "
+               "million words from 6,243 subtitle files; data published "
+               "with the paper under CC BY. Fetched once on first launch "
+               "(~4 MB).",
+        "book": "Most common first, by how often the word appears in "
+                "novels and other literature; the gray note gives its "
+                "rank among HSK words (words sharing a rank are exactly "
+                "tied in the data). Source: the "
+                "literature channel of the BCC corpus (Beijing Language "
+                "and Culture University; Xun, Rao, Xiao & Zang 2016), "
+                "185 million characters; free to download and use per "
+                "the BCC download centre, citation requested. Fetched "
+                "once on first launch (~1 MB).",
         "level": "Strictly increasing HSK level: all of one level before "
                  "any of the next, keeping the selected word order within "
                  "each level.",
         "blend": "All levels compete at once, ranked purely by the "
-                 "selected word order. In Smart order a lower HSK level "
-                 "still contributes %d%% of the score, nudging "
-                 "early-level words ahead when words are otherwise equal."
-                 % round(W_LEVEL * 100),
+                 "selected word order.",
     }
 
     js = JS % {"colors": json.dumps(LEVEL_COLORS),

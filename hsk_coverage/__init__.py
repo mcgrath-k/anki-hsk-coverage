@@ -19,25 +19,27 @@ import threading
 import time
 import traceback
 import html as html_mod
-from collections import defaultdict
+from collections import defaultdict, deque
 
 from aqt import mw
 from aqt.qt import (
     QDialog, QVBoxLayout, QHBoxLayout, QComboBox, QCheckBox, QLabel,
     QPushButton, QLineEdit, QFrame, QToolButton, QWidget, QSizePolicy,
-    QSpacerItem, QShortcut, QKeySequence, QFileDialog, QFontMetrics, QTimer, QEvent, Qt,
+    QSpacerItem, QProgressBar, QShortcut, QKeySequence, QFileDialog, QFontMetrics, QTimer, QEvent, Qt,
     qconnect,
 )
 from aqt.webview import AnkiWebView
 from aqt.theme import theme_manager
 
 from .vocab import (
-    Vocab, VERSIONS, VERSION_MAX, CEDICT_PATH, download_cedict,
+    Vocab, VERSIONS, VERSION_MAX, CEDICT_PATH, DOWNLOADS, download,
 )
 from .render import (
     LEVEL_COLORS, build_html, panel_stats, counts, level_label,
 )
-from .plan import recommend
+from .plan import recommend, FREQ_MODES
+
+PLAN_MODES = ("board",) + FREQ_MODES
 
 KNOWN_PATH = os.path.join(
     os.path.dirname(__file__), "user_files", "known_words.json")
@@ -167,25 +169,136 @@ def _chunks(seq, n=4000):
 _vocab = None
 
 def get_vocab():
-    """Load word data, fetching CC-CEDICT once on first ever run."""
+    """Load word data. On first ever run (or after a failed attempt) fetch
+    the dictionary and the corpus frequency lists first, behind a panel
+    that shows each transfer's progress and speed."""
     global _vocab
     if _vocab is None:
-        if not os.path.exists(CEDICT_PATH):
-            from aqt.utils import tooltip
-            mw.progress.start(
-                label="Downloading CC-CEDICT dictionary (one time, ~4 MB)…",
-                immediate=True)
-            try:
-                download_cedict()
-            except Exception as e:
+        missing = [d for d in DOWNLOADS if not os.path.exists(d[2])]
+        if missing:
+            dlg = DownloadDialog(mw, missing)
+            dlg.exec()
+            if dlg.failed:
+                from aqt.utils import tooltip
                 tooltip(
-                    "Dictionary download failed (%s) — definitions and "
-                    "traditional-form matching are unavailable; will retry "
-                    "next time the map is opened." % e, period=5000)
-            finally:
-                mw.progress.finish()
+                    "Download failed: %s. The map works without it; the "
+                    "download is retried next time the map opens, or from "
+                    "the study plan." % ", ".join(dlg.failed), period=6000)
         _vocab = Vocab()
     return _vocab
+
+
+def reload_vocab():
+    """Drop the cached data and load again (retrying any downloads)."""
+    global _vocab
+    _vocab = None
+    return get_vocab()
+
+
+def _fmt_bytes(n):
+    if n >= 1 << 20:
+        return "%.1f MB" % (n / (1 << 20))
+    return "%d KB" % (n / (1 << 10))
+
+
+class DownloadDialog(QDialog):
+    """The one-time downloads, one row each with a progress bar and a
+    'done of total · speed' line. Transfers run on a worker thread that
+    only writes to self._state; a timer on the Qt thread paints it."""
+
+    def __init__(self, parent, items):
+        super().__init__(parent)
+        self.setWindowTitle("HSK Coverage Map — downloading data")
+        self.setMinimumWidth(480)
+        self._items = items
+        # per item: [bytes done, total or None, bytes/s, status]
+        self._state = [[0, None, 0.0, ""] for _ in items]
+        self._cancel = False
+        self.failed = []
+        lay = QVBoxLayout(self)
+        intro = QLabel(
+            "Fetching the dictionary and word-frequency lists the map "
+            "needs. This happens once; everything is offline afterwards.")
+        intro.setWordWrap(True)
+        lay.addWidget(intro)
+        self._rows = []
+        for label, _url, _path in items:
+            lay.addSpacing(8)
+            lay.addWidget(QLabel("<b>%s</b>" % html_mod.escape(label)))
+            bar = QProgressBar()
+            bar.setRange(0, 1000)
+            lay.addWidget(bar)
+            st = QLabel("waiting…")
+            lay.addWidget(st)
+            self._rows.append((bar, st))
+        lay.addSpacing(8)
+        cancel = QPushButton("Cancel")
+        qconnect(cancel.clicked, self._on_cancel)
+        lay.addWidget(cancel, alignment=Qt.AlignmentFlag.AlignRight)
+        self._timer = QTimer(self)
+        self._timer.setInterval(100)
+        qconnect(self._timer.timeout, self._refresh)
+        self._timer.start()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        for i, (label, url, path) in enumerate(self._items):
+            if self._cancel:
+                self._state[i][3] = "cancelled"
+                continue
+            samples = deque()   # (time, bytes) over the last ~1.5 s
+
+            def progress(done, total, i=i, samples=samples):
+                now = time.monotonic()
+                samples.append((now, done))
+                while now - samples[0][0] > 1.5 and len(samples) > 1:
+                    samples.popleft()
+                dt = now - samples[0][0]
+                speed = (done - samples[0][1]) / dt if dt > 0.2 else 0.0
+                self._state[i][0:3] = [done, total, speed]
+            try:
+                ok = download(url, path, progress=progress,
+                              cancelled=lambda: self._cancel)
+                self._state[i][3] = "done" if ok else "cancelled"
+            except Exception as e:
+                self._state[i][3] = "failed: %s" % e
+                debug_line("download failed %s: %s" % (url, e))
+
+    def _refresh(self):
+        for (bar, st), (done, total, speed, status) in zip(
+                self._rows, self._state):
+            if status == "done":
+                bar.setRange(0, 1000)
+                bar.setValue(1000)
+                st.setText("done · %s" % _fmt_bytes(done))
+            elif status:
+                st.setText(status)
+            elif not done:
+                st.setText("waiting…")
+            else:
+                if total:
+                    bar.setValue(int(1000 * done / total))
+                    text = "%s of %s" % (_fmt_bytes(done), _fmt_bytes(total))
+                else:
+                    bar.setRange(0, 0)      # size unknown: busy bar
+                    text = _fmt_bytes(done)
+                if speed:
+                    text += " · %s/s" % _fmt_bytes(speed)
+                st.setText(text)
+        if not self._thread.is_alive():
+            self._timer.stop()
+            self.failed = [item[0] for item, state in
+                           zip(self._items, self._state)
+                           if state[3] != "done"]
+            self.accept()
+
+    def _on_cancel(self):
+        self._cancel = True
+
+    def reject(self):          # window close button
+        self._cancel = True
+        super().reject()
 
 
 # ------------------------------------------------------------ known words
@@ -422,8 +535,8 @@ class HSKCoverageDialog(QDialog):
         nm = cfg.get("nav_mode", "all")
         self._nav_mode = nm if nm in ("all", "unknown", "covered") else "all"
         self._plan_open = bool(cfg.get("plan_open", False))
-        pm = cfg.get("plan_mode", "smart")
-        self._plan_mode = pm if pm in ("smart", "board", "freq") else "smart"
+        pm = cfg.get("plan_mode", "book")
+        self._plan_mode = pm if pm in PLAN_MODES else "book"
         pl = cfg.get("plan_levels", "level")
         self._plan_levels = pl if pl in ("blend", "level") else "level"
         self._intro_seen = bool(cfg.get("intro_seen", False))
@@ -895,13 +1008,17 @@ class HSKCoverageDialog(QDialog):
             return None
         if cmd.startswith("hskplan:"):
             kind, _, val = cmd[len("hskplan:"):].partition(":")
-            if kind == "mode" and val in ("smart", "board", "freq"):
+            if kind == "mode" and val in PLAN_MODES:
                 self._plan_mode = val
             elif kind == "levels" and val in ("blend", "level"):
                 self._plan_levels = val
             else:
                 return None
             self.write_config()
+            return json.dumps(self.study_plan())
+        if cmd == "hskdownload":
+            # retry the one-time downloads from the study plan's notice
+            self.vocab = reload_vocab()
             return json.dumps(self.study_plan())
         if cmd == "hskintro:done":
             self._intro_seen = True
@@ -1066,9 +1183,10 @@ class HSKCoverageDialog(QDialog):
     def study_plan(self):
         """Ranked study recommendations for the side pane, enriched with
         pinyin, a first definition and the level color."""
+        freq = (self.vocab.freq_book if self._plan_mode == "book"
+                else self.vocab.freq_sub)
         items, total = recommend(self._last_levels, self._last_status,
-                                 self.vocab.freq,
-                                 mode=self._plan_mode,
+                                 freq, mode=self._plan_mode,
                                  by_level=self._plan_levels == "level")
         for it in items:
             tile = self._tile_index.get(it["w"])
@@ -1076,7 +1194,13 @@ class HSKCoverageDialog(QDialog):
                 it["w"], tile["aliases"] if tile else ())
             it["py"], it["def"] = self.vocab.best_gloss(info)
             it["color"] = LEVEL_COLORS.get(it["lvl"], "#888")
-        return {"items": items, "total": total}
+        out = {"items": items, "total": total}
+        if self._plan_mode in FREQ_MODES and not freq:
+            # the corpus list never got downloaded: say so instead of
+            # showing every word as "no frequency data"
+            out["missing"] = ("subtitle" if self._plan_mode == "sub"
+                              else "book")
+        return out
 
     def board_stats(self):
         """Per-panel header numbers + top summary (summary covers HSK 1-6
