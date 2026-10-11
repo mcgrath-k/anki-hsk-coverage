@@ -24,8 +24,8 @@ from collections import defaultdict
 from aqt import mw
 from aqt.qt import (
     QDialog, QVBoxLayout, QHBoxLayout, QComboBox, QCheckBox, QLabel,
-    QPushButton, QShortcut, QKeySequence, QFileDialog, QTimer, QEvent,
-    Qt, qconnect,
+    QPushButton, QLineEdit, QFrame, QToolButton, QShortcut, QKeySequence,
+    QFileDialog, QFontMetrics, QTimer, QEvent, Qt, qconnect,
 )
 from aqt.webview import AnkiWebView
 from aqt.theme import theme_manager
@@ -299,6 +299,107 @@ def scan_deck(deck_name, field_name):
 
 # ---------------------------------------------------------------- dialog
 
+class FindBar(QFrame):
+    """Floating find panel over the map (Cmd/Ctrl+F). The text field is a
+    native Qt widget on purpose: an HTML input inside the webview brings
+    up the macOS input-method popup in QtWebEngine, which freezes Anki
+    (same mechanism as the old <select> bug). It is a plain child widget
+    of the dialog, not a popup window, so there is no native popup at
+    all. Enter/↓ next match, Shift+Enter/↑ previous, Escape closes."""
+
+    def __init__(self, owner):
+        super().__init__(owner)
+        self.owner = owner
+        self.setObjectName("hskfind")
+        self.setStyleSheet(
+            "#hskfind { background: palette(base); "
+            "border: 1px solid palette(mid); border-radius: 8px; } "
+            "QToolButton { border: none; border-radius: 4px; } "
+            "QToolButton:hover { background: palette(midlight); }")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(8, 4, 4, 4)
+        lay.setSpacing(2)
+        self.edit = QLineEdit(self)
+        self.edit.setPlaceholderText("Find word")
+        self.edit.setFixedWidth(170)
+        self.edit.setFrame(False)
+        qconnect(self.edit.textChanged, owner.find_set)
+        lay.addWidget(self.edit)
+        self.count = QLabel("")
+        lay.addSpacing(6)
+        lay.addWidget(self.count)
+        lay.addSpacing(4)
+        h = self.edit.sizeHint().height()
+        for text, tip, fn in (
+                ("‹", "previous (shift+enter)", lambda: owner.find_go(-1)),
+                ("›", "next (enter)", lambda: owner.find_go(1)),
+                ("×", "close (esc)", self.close_)):
+            b = QToolButton(self)
+            b.setText(text)
+            b.setAutoRaise(True)
+            b.setFixedSize(h, h)
+            f = b.font()
+            f.setPointSize(f.pointSize() + 5)
+            b.setFont(f)
+            # the glyph's ink rarely sits at the centre of the font's
+            # line box (which is what gets centred in the button), so
+            # pad the box to centre the ink itself
+            fm = QFontMetrics(f)
+            off = fm.tightBoundingRect(text).center().y() \
+                - (fm.descent() - fm.ascent()) / 2.0
+            pad = int(round(2 * off))     # >0: ink is low, pad below
+            b.setStyleSheet("QToolButton { padding: %dpx 0 %dpx 0; }"
+                            % (max(0, -pad), max(0, pad)))
+            b.setToolTip(tip)
+            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            qconnect(b.clicked, fn)
+            lay.addWidget(b)
+        self.hide()
+
+    def place(self):
+        web = self.owner.web
+        self.adjustSize()
+        self.move(web.x() + (web.width() - self.width()) // 2, web.y() + 8)
+
+    def open(self):
+        self.place()
+        self.show()
+        self.raise_()
+        self.edit.setFocus()
+        self.edit.selectAll()
+
+    def set_count(self, text):
+        self.count.setText(text)
+        if self.isVisible():
+            self.place()     # the label changed width: re-fit and re-center
+
+    def close_(self):
+        self.edit.clear()
+        self.hide()
+        self.owner.web.setFocus()
+
+    def reset(self):
+        self.edit.blockSignals(True)
+        self.edit.clear()
+        self.edit.blockSignals(False)
+        self.count.setText("")
+        self.hide()
+
+    def keyPressEvent(self, ev):
+        k = ev.key()
+        if k in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            shift = bool(ev.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            self.owner.find_go(-1 if shift else 1)
+        elif k == Qt.Key.Key_Down:
+            self.owner.find_go(1)
+        elif k == Qt.Key.Key_Up:
+            self.owner.find_go(-1)
+        elif k == Qt.Key.Key_Escape:
+            self.close_()
+        else:
+            super().keyPressEvent(ev)
+
+
 class HSKCoverageDialog(QDialog):
     def __init__(self, parent):
         super().__init__(parent)
@@ -377,6 +478,7 @@ class HSKCoverageDialog(QDialog):
 
         self.web = AnkiWebView(self)
         self.web.set_bridge_command(self.on_bridge, self)
+        self.find_bar = FindBar(self)
         # let the page handle right-clicks (mark-known) itself
         self.web.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
 
@@ -389,6 +491,9 @@ class HSKCoverageDialog(QDialog):
                         ("Ctrl+0", self.zoom_reset)):
             sc = QShortcut(QKeySequence(seq), self)
             qconnect(sc.activated, fn)
+        # Cmd/Ctrl+F opens the in-page find bar (also handled in-page)
+        qconnect(QShortcut(QKeySequence("Ctrl+F"), self).activated,
+                 self.show_find)
 
         layout = QVBoxLayout(self)
         layout.addLayout(top)
@@ -445,6 +550,8 @@ class HSKCoverageDialog(QDialog):
     def resizeEvent(self, evt):
         self._log_geometry("dialog", self, evt)
         super().resizeEvent(evt)
+        if self.find_bar.isVisible():
+            self.find_bar.place()
 
     def closeEvent(self, evt):
         try:
@@ -692,6 +799,12 @@ class HSKCoverageDialog(QDialog):
             elif action == "debug":
                 self._reveal(DEBUG_LOG)
             return None
+        if cmd == "hsksearch:focus":
+            self.show_find()
+            return None
+        if cmd.startswith("hsksearch:count:"):
+            self.find_bar.set_count(cmd[len("hsksearch:count:"):])
+            return None
         if cmd.startswith("hskzoom:"):
             action = cmd[len("hskzoom:"):]
             if action == "in":
@@ -701,6 +814,15 @@ class HSKCoverageDialog(QDialog):
             elif action == "reset":
                 self.zoom_reset()
         return None
+
+    def show_find(self):
+        self.find_bar.open()
+
+    def find_set(self, text):
+        self.web.eval("if (window.findSet) findSet(%s)" % json.dumps(text))
+
+    def find_go(self, direction):
+        self.web.eval("if (window.findGo) findGo(%d)" % direction)
 
     def open_in_browser(self, word):
         """Open the browser on the exact notes the scan matched for this
@@ -899,6 +1021,7 @@ class HSKCoverageDialog(QDialog):
                           show_intro=not self._intro_seen,
                           plan_width=self._plan_width)
         self.web.setHtml(page)
+        self.find_bar.reset()
         self.write_config()
 
     def write_config(self):

@@ -102,12 +102,12 @@ body { margin:0; padding:18px; background:var(--bg); color:var(--text);
   color:var(--text); font-size:12px; padding:5px 12px; border-radius:8px;
   cursor:pointer; margin-left:auto; }
 .planbtn:hover { border-color:#3b82f6; color:#3b82f6; }
-body.planopen { padding-right:calc(var(--planw,332px) + 20px); }
 #plan { position:fixed; top:0; right:calc(-1 * var(--planw,332px) - 13px);
   width:var(--planw,332px); height:100%;
   background:var(--panel); border-left:1px solid var(--border);
   z-index:40; display:flex; flex-direction:column;
   transition:right .2s ease; }
+body.planopen { padding-right:calc(var(--planw,332px) + 20px); }
 body.planopen #plan { right:0; }
 #pgrip { position:absolute; left:0; top:0; width:6px; height:100%;
   cursor:col-resize; }
@@ -210,6 +210,16 @@ body.planopen #plan { right:0; }
 .card .path { font-family:ui-monospace,Menlo,Consolas,monospace;
   font-size:11px; color:var(--muted); word-break:break-all;
   margin-bottom:8px; }
+
+/* find matches (the text box itself is a native Qt widget in the
+   toolbar: an HTML input would engage the macOS input method inside
+   QtWebEngine, whose candidate popup is a native child window — the
+   same thing that froze Anki with <select>) */
+.t.fm { box-shadow:0 0 0 2px #fde047; }
+.t.fcur { box-shadow:0 0 0 2.5px #f59e0b; z-index:5;
+  animation:fbounce .55s cubic-bezier(.2,.8,.3,1.3); }
+@keyframes fbounce { 0% { transform:scale(1); }
+  45% { transform:scale(1.7); } 100% { transform:scale(1); } }
 """
 
 JS = r"""
@@ -248,6 +258,9 @@ document.addEventListener('contextmenu', function(e){
 });
 document.addEventListener('keydown', function(e){
   if (e.key === 'Escape'){ hideInfo(); hideOptions(); hideIntro(); }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f' && window.pycmd){
+    e.preventDefault(); pycmd('hsksearch:focus'); return;
+  }
   if (document.getElementById('iov').classList.contains('show')){
     if (e.key === 'ArrowRight'){ e.preventDefault(); introGo(1); }
     else if (e.key === 'ArrowLeft'){ e.preventDefault(); introGo(-1); }
@@ -531,6 +544,39 @@ window.addEventListener('DOMContentLoaded', function(){
   setPlan(INITIAL_PLAN);
   if (SHOW_INTRO) showIntro(0);
 });
+
+/* ---- find, Word-style: the toolbar's find box calls findSet(query);
+   every tile containing it gets a yellow ring, the current one an orange
+   ring and a bounce. findGo(±1) steps through the matches in board
+   order; the "4/54" counter is reported back to the toolbar ---- */
+var _fm = [], _fat = -1, _fq = '';
+function findSet(q){
+  _fm.forEach(function(t){ t.classList.remove('fm', 'fcur'); });
+  _fm = []; _fat = -1; _fq = q.trim();
+  if (_fq){
+    var tiles = document.querySelectorAll('#board .t[data-w]');
+    for (var i = 0; i < tiles.length; i++)
+      if (tiles[i].dataset.w.indexOf(_fq) >= 0) _fm.push(tiles[i]);
+  }
+  _fm.forEach(function(t){ t.classList.add('fm'); });
+  findGo(1);
+}
+function findCount(text){
+  if (window.pycmd) pycmd('hsksearch:count:' + text);
+}
+function findGo(dir){
+  if (!_fm.length){ findCount(_fq ? '0/0' : ''); return; }
+  if (_fat >= 0) _fm[_fat].classList.remove('fcur');
+  _fat = _fat < 0 ? (dir > 0 ? 0 : _fm.length - 1)
+                  : (_fat + dir + _fm.length) %% _fm.length;
+  var t = _fm[_fat];
+  var p = t.closest('.panel');
+  if (p.classList.contains('collapsed')) togglePanel(p);
+  t.scrollIntoView({block:'center'});
+  void t.offsetWidth;   // restart the bounce even when it's the same tile
+  t.classList.add('fcur');
+  findCount((_fat + 1) + '/' + _fm.length);
+}
 
 /* ---- known-word patches: retint tiles and update headers in place,
    never re-rendering or re-flowing the board ---- */
@@ -928,7 +974,7 @@ def build_html(levels_tiles, status, version_label, deck_name, field_name,
       in deck, not yet reviewed</span>
     <span><span class="t st-a">爱</span> not in deck</span>
     <span>hover to zoom · click for details (←/→ to browse) · right-click
-      to mark a word you already know</span>
+      to mark a word you already know · ⌘/Ctrl+F to find</span>
     <span class="hint" title="Within each panel: single-character words
       first, then multi-character words — each group in official HSK
       list order.">tile order</span>
