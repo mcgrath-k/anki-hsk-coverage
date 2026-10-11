@@ -756,6 +756,11 @@ function showOptions(){
        '<button onclick="opt(\'reveal\')">Show in folder</button>' +
        '<button onclick="opt(\'pick\')">Use existing file…</button>' +
        '<button onclick="opt(\'move\')">Move to new file…</button></div>';
+  h += '<div class="sec">Export</div>';
+  h += '<div class="btns">' +
+       '<button onclick="opt(\'copy\')">Copy this list as JSON</button>' +
+       '<button onclick="opt(\'save\')">Save this list as JSON…</button>' +
+       '</div>';
   h += '<div class="sec">Debugging</div>';
   h += '<div class="btns"><button onclick="opt(\'debug\')">' +
        'Show debug log in folder</button></div>';

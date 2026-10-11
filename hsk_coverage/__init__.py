@@ -34,7 +34,9 @@ from aqt.theme import theme_manager
 from .vocab import (
     Vocab, VERSIONS, VERSION_MAX, CEDICT_PATH, download_cedict,
 )
-from .render import LEVEL_COLORS, build_html, panel_stats, counts
+from .render import (
+    LEVEL_COLORS, build_html, panel_stats, counts, level_label,
+)
 from .plan import recommend
 
 KNOWN_PATH = os.path.join(
@@ -700,6 +702,63 @@ class HSKCoverageDialog(QDialog):
         if path:
             self._set_known_file(path, load=False)
 
+    # -- export
+
+    def export_text(self):
+        """The current list's coverage as simple JSON, meant to be pasted
+        into a chat or shared: words per level in named buckets."""
+        legend = {
+            "known": "reviewed in Anki, or marked known",
+            "unreviewed": "in the Anki deck but not reviewed yet, so "
+                          "the user does not know these words either",
+            "unknown": "not in the Anki deck",
+        }
+        def j(x):
+            return json.dumps(x, ensure_ascii=False)
+        # hand-formatted so each bucket's words stay on one line: a
+        # pretty-printed dump would be one word per line, thousands long
+        out = ['{', ' "list": %s,' % j(self.ver_box.currentText()),
+               ' "deck": %s,' % j(self.deck_box.currentText()),
+               ' "legend": {']
+        out += [',\n'.join('  %s: %s' % (j(k), j(v))
+                           for k, v in legend.items()), ' },', ' "levels": {']
+        blocks = []
+        for lvl, tiles in sorted(self._last_levels.items()):
+            buckets = {k: [] for k in legend}
+            for t in tiles:
+                st = self._last_status.get(t["w"], 0)
+                if st == 2:
+                    key = "known"
+                elif st == 1:
+                    key = "unreviewed"
+                else:
+                    key = "unknown"
+                buckets[key].append(t["w"])
+            blocks.append('  %s: {\n%s\n  }' % (
+                j(level_label(lvl)),
+                ',\n'.join('   %s: %s' % (j(k), j(v))
+                           for k, v in buckets.items())))
+        out += [',\n'.join(blocks), ' }', '}']
+        return '\n'.join(out)
+
+    def export_json(self, save):
+        from aqt.utils import tooltip
+        text = self.export_text()
+        label = self.ver_box.currentText()
+        if not save:
+            mw.app.clipboard().setText(text)
+            tooltip("Copied %s coverage as JSON" % label, parent=self)
+            return
+        name = "%s_coverage_%s.json" % (
+            re.sub(r"[^\w.]+", "_", label).strip("_"),
+            time.strftime("%Y-%m-%d"))
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save coverage as JSON", name, "JSON files (*.json)")
+        if path:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+            tooltip("Saved %s" % os.path.basename(path), parent=self)
+
     def collapsed_levels(self, ver):
         default = [7] if VERSION_MAX[ver] >= 7 else []
         return set(self.collapsed.get(ver, default))
@@ -864,6 +923,8 @@ class HSKCoverageDialog(QDialog):
                 self.create_known_file()
             elif action == "debug":
                 self._reveal(DEBUG_LOG)
+            elif action in ("copy", "save"):
+                self.export_json(save=action == "save")
             return None
         if cmd == "hsksearch:focus":
             self.show_find()
