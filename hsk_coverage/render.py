@@ -793,8 +793,10 @@ def counts(tiles, status):
 def panel_stats(lvl, tiles, status, cum_total):
     """Header numbers for one panel, as strings ready for HTML/JS patch."""
     reviewed, indeck, total = counts(tiles, status)
-    covered = reviewed + indeck
-    pct = 100.0 * covered / total if total else 0.0
+    # the panel percentage counts reviewed-or-known words only (filled
+    # tiles); unreviewed cards show as the lighter bar segment and in
+    # the stat line, but not in the number
+    pct = 100.0 * reviewed / total if total else 0.0
     return {
         "lvl": lvl,
         "pct": "%.0f%%" % pct,
