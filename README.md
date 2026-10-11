@@ -36,3 +36,7 @@ The add-on lives in `hsk_coverage/`. `python3 make_anki_addon.py` packages it as
 - Dictionary data (pinyin, meanings, traditional forms) is CC-CEDICT (CC BY-SA 4.0), downloaded once from MDBG on first run: https://www.mdbg.net/chinese/dictionary?page=cc-cedict
 - Subtitle frequency: SUBTLEX-CH word frequencies, from Cai, Q. & Brysbaert, M. (2010), "SUBTLEX-CH: Chinese Word and Character Frequencies Based on Film Subtitles", PLoS ONE 5(6): e10729, https://doi.org/10.1371/journal.pone.0010729 (data published with the paper under CC BY; file from https://www.ugent.be/pp/experimentele-psychologie/en/research/documents/subtlexch)
 - Book frequency: the literature-channel word list of the BCC corpus (Beijing Language and Culture University), https://bcc.blcu.edu.cn (download centre: free to download and use, citation requested). Cite 荀恩东, 饶高琦, 肖晓悦, 臧娇娇. 大数据背景下BCC语料库的研制. 语料库语言学, 2016, 3(01): 93-109.
+
+## License
+
+Apache License 2.0; see [LICENSE](LICENSE). You may use, modify and redistribute the add-on, including commercially, provided you keep the copyright notice and the [NOTICE](NOTICE) file crediting the original work and mark any changes you make. The data sources above carry their own terms.
