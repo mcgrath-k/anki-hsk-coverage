@@ -213,6 +213,7 @@ body.planopen #plan { right:0; }
 .card .ttl { font-size:18px; font-weight:700; }
 .card .sec { font-size:11px; font-weight:700; letter-spacing:0.06em;
   text-transform:uppercase; color:var(--muted); margin:16px 0 6px 0; }
+.card .note { font-size:12px; color:var(--muted); margin:6px 0 2px 0; }
 .card .path { font-family:ui-monospace,Menlo,Consolas,monospace;
   font-size:11px; color:var(--muted); word-break:break-all;
   margin-bottom:8px; }
@@ -769,9 +770,18 @@ function showOptions(){
        '<button onclick="opt(\'pick\')">Use existing file…</button>' +
        '<button onclick="opt(\'move\')">Move to new file…</button></div>';
   h += '<div class="sec">Export</div>';
+  h += '<div class="note">Coverage of the current list, by level</div>';
   h += '<div class="btns">' +
-       '<button onclick="opt(\'copy\')">Copy this list as JSON</button>' +
-       '<button onclick="opt(\'save\')">Save this list as JSON…</button>' +
+       '<button onclick="opt(\'copy\')">Copy as JSON</button>' +
+       '<button onclick="opt(\'save\')">Save as JSON…</button>' +
+       '</div>';
+  h += '<div class="note">All known words — reviewed in your deck or ' +
+       'marked known, across every HSK list</div>';
+  h += '<div class="btns">' +
+       '<button onclick="opt(\'known:txt:copy\')">Copy as text</button>' +
+       '<button onclick="opt(\'known:txt:save\')">Save as .txt…</button>' +
+       '<button onclick="opt(\'known:json:copy\')">Copy as JSON</button>' +
+       '<button onclick="opt(\'known:json:save\')">Save as JSON…</button>' +
        '</div>';
   h += '<div class="sec">Debugging</div>';
   h += '<div class="btns"><button onclick="opt(\'debug\')">' +

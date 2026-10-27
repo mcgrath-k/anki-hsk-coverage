@@ -873,6 +873,51 @@ class HSKCoverageDialog(QDialog):
                 f.write(text)
             tooltip("Saved %s" % os.path.basename(path), parent=self)
 
+    def known_words(self):
+        """Every word counted as known — reviewed in the deck or marked
+        known — across all HSK lists, current list's order first, each
+        word once."""
+        cur = self.ver_box.currentData()
+        order = [cur] + [v for v in self.vocab.levels if v != cur]
+        out, seen = [], set()
+        for ver in order:
+            for lvl in sorted(self.vocab.levels[ver]):
+                for t in self.vocab.levels[ver][lvl]:
+                    w = t["w"]
+                    if w in seen:
+                        continue
+                    if w in self.known or self._status(t["aliases"]) == 2:
+                        seen.add(w)
+                        out.append(w)
+        return out
+
+    def export_known(self, fmt, save):
+        from aqt.utils import tooltip
+        words = self.known_words()
+        if fmt == "txt":
+            text = "\n".join(words) + "\n"
+            filt = "Text files (*.txt)"
+        else:
+            text = json.dumps({
+                "deck": self.deck_box.currentText(),
+                "legend": "words reviewed in Anki or marked known, across "
+                          "all HSK lists",
+                "words": words,
+            }, ensure_ascii=False, indent=1)
+            filt = "JSON files (*.json)"
+        if not save:
+            mw.app.clipboard().setText(text)
+            tooltip("Copied %d known words" % len(words), parent=self)
+            return
+        name = "known_words_%s.%s" % (time.strftime("%Y-%m-%d"), fmt)
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save known words", name, filt)
+        if path:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+            tooltip("Saved %d known words to %s"
+                    % (len(words), os.path.basename(path)), parent=self)
+
     def collapsed_levels(self, ver):
         default = [7] if VERSION_MAX[ver] >= 7 else []
         return set(self.collapsed.get(ver, default))
@@ -1046,6 +1091,9 @@ class HSKCoverageDialog(QDialog):
                 openLink(ISSUES_URL)
             elif action in ("copy", "save"):
                 self.export_json(save=action == "save")
+            elif action.startswith("known:"):
+                _k, fmt, how = action.split(":")
+                self.export_known(fmt, save=how == "save")
             return None
         if cmd == "hsksearch:focus":
             self.show_find()
