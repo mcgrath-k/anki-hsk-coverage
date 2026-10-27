@@ -6,9 +6,7 @@ Supports HSK 2.0 (2012), HSK 3.0 (2021) and HSK 3.0 (2025, informally "HSK 3.1")
 
 HSK is a trademark of Hanban / Chinese Testing International. This is an independent project, not affiliated with or endorsed by them.
 
-![The coverage map: HSK 1 complete, HSK 2 at 82%, HSK 3 at 22%](docs/screenshot.png)
-
-![The study plan pane, ordered by book frequency](docs/screenshot-study-plan.png)
+![The coverage map on the HSK 2.0 list: levels 1–4 collapsed and complete, HSK 5 partly covered](docs/screenshot.png)
 
 ## Install
 
