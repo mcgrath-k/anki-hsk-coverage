@@ -7,8 +7,9 @@ meta.json; user_files/ is excluded so an install never ships or overwrites
 personal data (known_words.json, downloaded dictionary, debug log).
 
 Of the data folders, only the per-level word lists the add-on actually
-reads (plus their readme attribution) are shipped — not the source
-spreadsheets/PDFs/character lists.
+reads (plus data/SOURCES.md crediting them) are shipped — not the
+character lists or other derived files. LICENSE and NOTICE from the repo
+root ride along at the zip root so redistributions carry them.
 """
 import fnmatch
 import os
@@ -26,11 +27,13 @@ def wanted(rel, name):
         return False
     if rel.split(os.sep)[0] == "data":
         return fnmatch.fnmatch(name, "*_words_level*.txt") \
-            or name.lower() == "readme.md"
+            or name == "SOURCES.md"
     return True
 
 
 with zipfile.ZipFile(OUT, "w", zipfile.ZIP_DEFLATED) as z:
+    for extra in ("LICENSE", "NOTICE"):
+        z.write(os.path.join(ROOT, extra), extra)
     for root, dirs, files in os.walk(SRC):
         dirs[:] = sorted(d for d in dirs if d not in EXCLUDE_DIRS)
         for name in sorted(files):

@@ -19,7 +19,9 @@ On first open the add-on downloads CC-CEDICT and the two word-frequency lists (a
 Requires Anki 2.1.50 or later. Works on macOS, Windows and Linux.
 
 <b>Data sources</b>
-HSK word lists via MteH (https://github.com/becky82/mteh). Dictionary: CC-CEDICT, CC BY-SA 4.0. Subtitle frequencies: SUBTLEX-CH (Cai & Brysbaert 2010, PLoS ONE; CC BY). Book frequencies: BCC corpus literature channel, Beijing Language and Culture University (free to download and use; citation requested).
+HSK word lists are the official syllabi, as compiled by MteH (https://github.com/becky82/mteh). Dictionary: CC-CEDICT, CC BY-SA 4.0. Subtitle frequencies: SUBTLEX-CH (Cai & Brysbaert 2010, PLoS ONE; CC BY). Book frequencies: BCC corpus literature channel, Beijing Language and Culture University (free to download and use; citation requested).
+
+HSK is a trademark of Hanban / Chinese Testing International; this add-on is an independent project, not affiliated with or endorsed by them. The add-on sends no data anywhere: its only network activity is the three first-launch downloads above (from mdbg.net, ugent.be and bcc.blcu.edu.cn), and the debug log stays on your computer.
 
 <b>Problems or ideas</b>
 Please report them on GitHub: https://github.com/mcgrath-k/anki-hsk-coverage/issues — the add-on's Options pane has a "Report a problem" button and a "Show debug log" button to attach the log.

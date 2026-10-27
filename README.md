@@ -4,6 +4,8 @@ An Anki add-on that shows how much of the official HSK vocabulary your deck cove
 
 Supports HSK 2.0 (2012), HSK 3.0 (2021) and HSK 3.0 (2025, informally "HSK 3.1").
 
+HSK is a trademark of Hanban / Chinese Testing International. This is an independent project, not affiliated with or endorsed by them.
+
 ## Install
 
 - **From AnkiWeb:** Tools ▸ Add-ons ▸ Get Add-ons…, enter the code `ANKIWEB_CODE`, restart Anki.
@@ -32,7 +34,7 @@ The add-on lives in `hsk_coverage/`. `python3 make_anki_addon.py` packages it as
 
 ## Data sources
 
-- HSK vocabulary lists are collected from Rebecca J. Stone's MteH: https://github.com/becky82/mteh
+- HSK vocabulary lists are the official syllabi (Hanban 2012; GF0025-2021; Chinese Testing International 2025) as compiled by Rebecca J. Stone's MteH: https://github.com/becky82/mteh — see `hsk_coverage/data/SOURCES.md`
 - Dictionary data (pinyin, meanings, traditional forms) is CC-CEDICT (CC BY-SA 4.0), downloaded once from MDBG on first run: https://www.mdbg.net/chinese/dictionary?page=cc-cedict
 - Subtitle frequency: SUBTLEX-CH word frequencies, from Cai, Q. & Brysbaert, M. (2010), "SUBTLEX-CH: Chinese Word and Character Frequencies Based on Film Subtitles", PLoS ONE 5(6): e10729, https://doi.org/10.1371/journal.pone.0010729 (data published with the paper under CC BY; file from https://www.ugent.be/pp/experimentele-psychologie/en/research/documents/subtlexch)
 - Book frequency: the literature-channel word list of the BCC corpus (Beijing Language and Culture University), https://bcc.blcu.edu.cn (download centre: free to download and use, citation requested). Cite 荀恩东, 饶高琦, 肖晓悦, 臧娇娇. 大数据背景下BCC语料库的研制. 语料库语言学, 2016, 3(01): 93-109.
