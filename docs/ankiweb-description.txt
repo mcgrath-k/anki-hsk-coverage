@@ -1,5 +1,9 @@
 See at a glance how much of the official HSK vocabulary your Anki deck covers, as a map of hanzi tiles: one tile per word, grouped by level, filled in once you've reviewed it.
 
+<img src="https://raw.githubusercontent.com/mcgrath-k/anki-hsk-coverage/main/docs/screenshot.png">
+
+<img src="https://raw.githubusercontent.com/mcgrath-k/anki-hsk-coverage/main/docs/screenshot-study-plan.png">
+
 <b>What it does</b>
 <ul>
 <li>Supports the HSK 2.0 (2012), HSK 3.0 (2021) and HSK 3.0 (2025) word lists, with the official per-level counts (300 / 200 / 500 / 1000 / 1600 / 1800, plus 5600 for levels 7–9 on the 2025 list).</li>
