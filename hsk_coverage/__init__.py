@@ -21,11 +21,13 @@ import traceback
 import html as html_mod
 from collections import defaultdict, deque
 
+import aqt.utils
 from aqt import mw
 from aqt.qt import (
     QDialog, QVBoxLayout, QHBoxLayout, QComboBox, QCheckBox, QLabel,
     QPushButton, QLineEdit, QFrame, QToolButton, QWidget, QSizePolicy,
     QSpacerItem, QProgressBar, QShortcut, QKeySequence, QFileDialog, QFontMetrics, QTimer, QEvent, Qt,
+    QApplication, QPalette, QColor, QPoint,
     qconnect,
 )
 from aqt.webview import AnkiWebView
@@ -33,6 +35,7 @@ from aqt.theme import theme_manager
 
 from .vocab import (
     Vocab, VERSIONS, VERSION_MAX, CEDICT_PATH, DOWNLOADS, download,
+    word_levels,
 )
 from .render import (
     LEVEL_COLORS, build_html, panel_stats, counts, level_label,
@@ -1365,7 +1368,109 @@ def setup_menu():
 setup_menu()
 
 try:
-    # dump Python stacks into debug.log on a hard crash (segfault etc.)
-    faulthandler.enable(_debug_file())
-except (OSError, RuntimeError):
+    from aqt import gui_hooks
+    gui_hooks.add_cards_did_add_note.append(_on_note_added)
+    gui_hooks.editor_did_unfocus_field.append(_on_field_unfocused)
+except (ImportError, AttributeError):
     pass
+
+# ------------------------------------------------------- add-card notice
+
+_notice = None
+
+def _close_notice(lab):
+    global _notice
+    if lab is not None and lab is _notice:
+        _notice = None
+        try:
+            lab.deleteLater()
+        except RuntimeError:
+            pass  # already deleted along with the Add window
+
+
+def level_notice_html(label, levels):
+    """A label, then to its right one colored square per HSK list the
+    word is on, each under a small caption naming the list."""
+    caps = "".join(
+        "<td align=center valign=bottom style='font-size:9px;color:#888;padding:0 3px'>"
+        "HSK&nbsp;%s</td>" % v for v in levels)
+    # each square is its own one-cell table, so it keeps its shape
+    # instead of stretching to the caption's width
+    cells = "".join(
+        "<td align=center><table cellspacing=0 cellpadding=0 align=center>"
+        "<tr><td align=center bgcolor='%s' style='color:#fff;"
+        "border:1px solid #000;padding:5px 9px'><b>%s</b></td></tr>"
+        "</table></td>" % (LEVEL_COLORS[lvl], "7–9" if lvl == 7 else lvl)
+        for lvl in levels.values())
+    return ("<table cellspacing=0 cellpadding=0><tr>"
+            "<td style='font-size:1px'></td>%s</tr>"
+            "<tr><td valign=middle>%s&nbsp;&nbsp;</td>%s</tr></table>"
+            % (caps, label, cells))
+
+
+def show_level_notice(note, label, idx=None):
+    """When the note's word is on an HSK list, show its level in each
+    list in a small popup styled and placed like Anki's own. The word
+    is read from the map's configured field, or the first field if the
+    note lacks it; idx limits the popup to that field."""
+    global _notice
+    cfg = mw.addonManager.getConfig(__name__) or {}
+    if not cfg.get("notify_on_add", True) or not note.fields:
+        return
+    names = [f["name"] for f in note.note_type()["flds"]]
+    field = cfg.get("field")
+    pos = names.index(field) if field in names else 0
+    if idx not in (None, pos):
+        return
+    txt = _clean(note.fields[pos])
+    index = word_levels()
+    levels = index.get(txt) or index.get(_hanzi_only(txt))
+    if not levels:
+        return
+    _close_notice(_notice)
+    win = QApplication.activeWindow() or mw
+    lab = _notice = QLabel(level_notice_html(label, levels), win)
+    lab.setFrameStyle(QFrame.Shape.Panel)
+    lab.setLineWidth(2)
+    lab.setMargin(4)
+    lab.setWindowFlags(Qt.WindowType.ToolTip)
+    if not theme_manager.night_mode:
+        pal = QPalette()
+        pal.setColor(QPalette.ColorRole.Window, QColor("#feffc4"))
+        pal.setColor(QPalette.ColorRole.WindowText, QColor("#000000"))
+        lab.setPalette(pal)
+    lab.adjustSize()
+    _place_notice(lab, win)
+    lab.show()
+    # Anki's popups come and go while ours is up: keep it in step
+    follow = QTimer(lab)
+    qconnect(follow.timeout, lambda: _place_notice(lab, win))
+    follow.start(100)
+    QTimer.singleShot(int(cfg.get("notify_seconds", 3) * 1000),
+                      lambda: _close_notice(lab))
+
+
+def _place_notice(lab, win):
+    """Put the popup exactly where Anki puts its own (bottom-left of the
+    window), or stacked right above Anki's popup while one is up there."""
+    pos = win.mapToGlobal(QPoint(0, win.height() - 100))
+    try:
+        native = aqt.utils._tooltipLabel
+        if native.parent() is win:
+            pos = native.pos() - QPoint(0, lab.height() + 4)
+    except (AttributeError, RuntimeError):
+        pass  # no Anki popup up
+    lab.move(pos)
+
+
+def _on_note_added(note):
+    show_level_notice(note, "Added HSK Vocabulary:")
+
+
+def _on_field_unfocused(changed, note, idx):
+    # a note still being built in the Add window has no id yet
+    if not note.id:
+        show_level_notice(note, "HSK Vocabulary:", idx)
+    return changed
+
+

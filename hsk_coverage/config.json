@@ -11,5 +11,7 @@
   "plan_mode": "book",
   "plan_levels": "level",
   "intro_seen": false,
-  "plan_width": 332
+  "plan_width": 332,
+  "notify_on_add": true,
+  "notify_seconds": 3
 }

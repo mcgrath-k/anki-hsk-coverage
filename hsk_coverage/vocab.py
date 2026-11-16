@@ -109,6 +109,27 @@ def parse_entry(raw):
     return display, variants
 
 
+_word_levels = None
+
+def word_levels():
+    """word -> {"2.0": level, "3.0": level, ...} for every list the word
+    is on, read from the level files alone (no dictionary or frequency
+    data), so it is cheap to use outside the map. Built on first use."""
+    global _word_levels
+    if _word_levels is None:
+        _word_levels = {}
+        for _key, _label, folder, suffixes in VERSIONS:
+            for lvl, sfx in enumerate(suffixes, start=1):
+                path = os.path.join(
+                    DATA_DIR, folder, "%s_words_level%s.txt" % (folder, sfx))
+                with open(path, encoding="utf-8") as f:
+                    for line in f:
+                        for w in parse_entry(line)[1]:
+                            _word_levels.setdefault(w, {}).setdefault(
+                                folder[3:], lvl)
+    return _word_levels
+
+
 # ---------------------------------------------------------------- CC-CEDICT
 
 def download(url, path, timeout=60, progress=None, cancelled=None):
