@@ -213,6 +213,10 @@ body.planopen #plan { right:0; }
 .card .ttl { font-size:18px; font-weight:700; }
 .card .sec { font-size:11px; font-weight:700; letter-spacing:0.06em;
   text-transform:uppercase; color:var(--muted); margin:16px 0 6px 0; }
+.card .secs { align-self:center; font-size:12.5px; color:var(--muted); }
+.card .secs input { width:44px; font-size:12.5px; padding:5px 6px;
+  border:1px solid var(--border); border-radius:8px;
+  background:var(--tile); color:var(--text); }
 .card .note { font-size:12px; color:var(--muted); margin:6px 0 2px 0; }
 .card .path { font-family:ui-monospace,Menlo,Consolas,monospace;
   font-size:11px; color:var(--muted); word-break:break-all;
@@ -233,6 +237,8 @@ JS = r"""
 var LEVEL_COLORS = %(colors)s;
 var VER_LABELS = {"old":"HSK 2.0","new":"HSK 3.0 (2021)","newest":"HSK 3.0 (2025)"};
 var NAV_MODE = %(nav_mode)s;      // 'all' | 'unknown' | 'covered'
+var NOTIFY_ON_ADD = %(notify_on_add)s;  // HSK level popup on "Added"
+var NOTIFY_SECONDS = %(notify_seconds)s;  // how long it stays up
 var KNOWN_PATH = %(known_path)s;  // shown in the options popup
 var INITIAL_PLAN = %(plan)s;      // study-plan items rendered on load
 var PLAN_MODE = %(plan_mode)s;    // 'board' | 'book' | 'sub'
@@ -763,6 +769,18 @@ function showOptions(){
          'onclick="setNavMode(\'' + p[0] + '\')">' + p[1] + '</button>';
   });
   h += '</div>';
+  h += '<div class="sec">When adding a card</div>';
+  h += '<div class="note">Show the word\'s HSK level next to the ' +
+       '"Added" popup</div>';
+  h += '<div class="btns">';
+  [[true, 'On'], [false, 'Off']].forEach(function(p){
+    h += '<button class="' + (NOTIFY_ON_ADD === p[0] ? 'st-deck' : '') +
+         '" onclick="setNotify(' + p[0] + ')">' + p[1] + '</button>';
+  });
+  h += '<span class="secs">for <input type="number" min="1" max="60" ' +
+       'value="' + NOTIFY_SECONDS + '" ' +
+       'onchange="setNotifySeconds(this)"> seconds</span>';
+  h += '</div>';
   h += '<div class="sec">Known-words database</div>';
   h += '<div class="path">' + esc(KNOWN_PATH) + '</div>';
   h += '<div class="btns">' +
@@ -797,6 +815,16 @@ function setNavMode(v){
   NAV_MODE = v;
   if (window.pycmd) pycmd('hsknav:' + v);
   showOptions();   // re-render so the selected button highlights
+}
+function setNotify(on){
+  NOTIFY_ON_ADD = on;
+  if (window.pycmd) pycmd('hsknotify:' + (on ? '1' : '0'));
+  showOptions();
+}
+function setNotifySeconds(box){
+  var n = Math.min(60, Math.max(1, parseFloat(box.value) || 3));
+  box.value = NOTIFY_SECONDS = n;
+  if (window.pycmd) pycmd('hsknotifysecs:' + n);
 }
 function opt(action){
   if (window.pycmd) pycmd('hskopt:' + action);
@@ -922,7 +950,7 @@ def build_html(levels_tiles, status, version_label, deck_name, field_name,
                night=False, collapsed_levels=(), extra_js="",
                nav_mode="all", known_file="", plan=None, plan_open=False,
                plan_mode="book", plan_levels="level", show_intro=False,
-               plan_width=332):
+               plan_width=332, notify_on_add=True, notify_seconds=3):
     panels = []
     reviewed = indeck = total = 0       # HSK 1-6 only, for the top summary
     cum = 0
@@ -976,6 +1004,8 @@ def build_html(levels_tiles, status, version_label, deck_name, field_name,
     js = JS % {"colors": json.dumps(LEVEL_COLORS),
                "nav_mode": json.dumps(nav_mode),
                "known_path": json.dumps(known_file),
+               "notify_on_add": json.dumps(bool(notify_on_add)),
+               "notify_seconds": json.dumps(notify_seconds),
                "plan": json.dumps(plan),
                "plan_mode": json.dumps(plan_mode),
                "plan_levels": json.dumps(plan_levels),

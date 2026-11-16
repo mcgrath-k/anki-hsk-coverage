@@ -544,6 +544,8 @@ class HSKCoverageDialog(QDialog):
         pl = cfg.get("plan_levels", "level")
         self._plan_levels = pl if pl in ("blend", "level") else "level"
         self._intro_seen = bool(cfg.get("intro_seen", False))
+        self._notify_on_add = bool(cfg.get("notify_on_add", True))
+        self._notify_seconds = cfg.get("notify_seconds", 3)
         try:
             self._plan_width = max(240, min(640,
                                             int(cfg.get("plan_width", 332))))
@@ -1079,6 +1081,14 @@ class HSKCoverageDialog(QDialog):
                 self._nav_mode = mode
                 self.write_config()
             return None
+        if cmd.startswith("hsknotify:"):
+            self._notify_on_add = cmd.endswith(":1")
+            self.write_config()
+            return None
+        if cmd.startswith("hsknotifysecs:"):
+            self._notify_seconds = float(cmd[len("hsknotifysecs:"):])
+            self.write_config()
+            return None
         if cmd.startswith("hskopt:"):
             action = cmd[len("hskopt:"):]
             if action == "reveal":
@@ -1320,6 +1330,8 @@ class HSKCoverageDialog(QDialog):
                           deck, field, night=theme_manager.night_mode,
                           collapsed_levels=self.collapsed_levels(ver),
                           nav_mode=self._nav_mode, known_file=known_path(),
+                          notify_on_add=self._notify_on_add,
+                          notify_seconds=self._notify_seconds,
                           plan=self.study_plan(),
                           plan_open=self._plan_open,
                           plan_mode=self._plan_mode,
@@ -1345,6 +1357,8 @@ class HSKCoverageDialog(QDialog):
             "plan_levels": self._plan_levels,
             "intro_seen": self._intro_seen,
             "plan_width": self._plan_width,
+            "notify_on_add": self._notify_on_add,
+            "notify_seconds": self._notify_seconds,
         })
 
 
@@ -1367,12 +1381,6 @@ def setup_menu():
 
 setup_menu()
 
-try:
-    from aqt import gui_hooks
-    gui_hooks.add_cards_did_add_note.append(_on_note_added)
-    gui_hooks.editor_did_unfocus_field.append(_on_field_unfocused)
-except (ImportError, AttributeError):
-    pass
 
 # ------------------------------------------------------- add-card notice
 
@@ -1474,3 +1482,9 @@ def _on_field_unfocused(changed, note, idx):
     return changed
 
 
+try:
+    from aqt import gui_hooks
+    gui_hooks.add_cards_did_add_note.append(_on_note_added)
+    gui_hooks.editor_did_unfocus_field.append(_on_field_unfocused)
+except (ImportError, AttributeError):
+    pass
