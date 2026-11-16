@@ -24,6 +24,7 @@ Open **Tools ▸ HSK Coverage Map**, pick the deck, the note field that holds th
 - **Right-click** a tile to mark a word you already know without a card. The list lives in a JSON file that Options can move outside the add-on folder so it survives reinstalls.
 - **⌘ / Ctrl+F** finds a word and steps through the matches.
 - **Study plan** lists every word you don't know yet: alphabetically, or by frequency in books or in film and TV subtitles, level by level or mixed. Add cards with the map open and rows tick themselves off.
+- **Adding a card** for a word on an HSK list shows its level in each list in a small popup, both when you leave the word field and when the card is added. Options turns it off or sets how long it stays.
 - **Options ▸ Export** copies or saves the current list's coverage as JSON, handy for pasting into a chat with an AI for study planning, and exports all your known words across every list as plain text or JSON.
 
 ## Reporting problems

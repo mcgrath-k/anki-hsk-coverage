@@ -10,6 +10,7 @@ See at a glance how much of the official HSK vocabulary your Anki deck covers, a
 <li>Right-click a tile to mark a word you already know without an Anki card; the list is kept in a JSON file you can move outside the add-on folder.</li>
 <li>Cmd/Ctrl+F finds a word on the map and steps through the matches.</li>
 <li>A study plan pane lists every word you don't know yet, alphabetically or by frequency in books (BCC literature corpus) or in film and TV subtitles (SUBTLEX-CH), either level by level or mixed. Add cards in Anki with the map open and rows tick themselves off.</li>
+<li>When you add a card for a word on an HSK list, a small popup shows its level in each list, both when you leave the word field and when the card is added. Options turns it off or sets how long it stays.</li>
 <li>Export the current list's coverage as JSON (copy or save) to paste into a chat with an AI for study planning.</li>
 </ul>
 
